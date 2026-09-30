@@ -43,7 +43,7 @@ try {
   const t0 = Date.now();
   await page.goto(BASE, { waitUntil: 'networkidle2', timeout: 120_000 });
 
-  for (const mode of ['cinematic', 'orbit']) {
+  for (const mode of ['cinematic', 'orbit', 'desert']) {
     const before = errors.length;
     const start = Date.now();
 
@@ -77,17 +77,31 @@ try {
       bboxCheck = { dims, maxDim, pass: maxDim > 0 && maxDim < 8 };
     }
 
+    // regresión de performance en Desierto: el escenario es procedural e
+    // instanciado, así que las draw calls deben mantenerse acotadas.
+    let budget = null;
+    if (mode === 'desert') {
+      const calls = Number((stats.match(/(\d+) draw calls/) ?? [])[1] ?? -1);
+      const loop = await page.$eval('#time', (e) => e.textContent ?? '');
+      budget = {
+        drawCalls: calls,
+        loopLabel: loop,
+        pass: calls > 0 && calls < 420 && /\/ 15 s/.test(loop),
+      };
+    }
+
     const shot = `${OUT}/${mode}.png`;
     await page.screenshot({ path: shot });
 
     results.push({
       mode,
-      ok: errors.length === before && (bboxCheck?.pass ?? true),
+      ok: errors.length === before && (bboxCheck?.pass ?? true) && (budget?.pass ?? true),
       loadMs,
       stats,
       hud,
       canvas: cam,
       bboxCheck,
+      budget,
       newErrors: errors.slice(before),
       screenshot: shot,
     });

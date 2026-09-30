@@ -6,7 +6,7 @@ export interface CameraTrack {
   frames: number[][];
 }
 
-export type ModeId = 'cinematic' | 'orbit';
+export type ModeId = 'cinematic' | 'orbit' | 'desert';
 
 export interface ViewerMode {
   id: ModeId;

@@ -2,13 +2,16 @@
 
 Visor 3D del proyecto Blender **F100** montado con **three.js** + **Vite** + **TypeScript**.
 
-Dos modos, conmutables desde las pestañas superiores:
+Tres modos, conmutables desde las pestañas superiores:
 
 - **Cinemática** — la escena completa (`escena.glb`) con las 119 animaciones horneadas
   y el track de cámara de Blender (`camara.json`: posición, rotación y FOV horizontal
   por frame, 24 fps, 1700 frames ≈ 71 s). Play/pausa, barra de scrub y cámara libre.
 - **Modelo** — inspección orbital solo de la camioneta, extraída del subárbol
   `HandlerVehicle005`. Auto-rotación, wireframe, reencuadre y dimensiones reales.
+- **Desierto** — escena original hecha 100 % con three.js: recta de desierto al
+  anochecer, tierra roja, cactus, acera y luna llena. Bucle de 15 s con cuatro
+  cámaras (persecución, lateral, capó, libre). Del glb solo se usa la camioneta.
 
 ## Stack
 
@@ -85,3 +88,43 @@ Resultado actual: ambos modos OK, ~2,97 M tris / 495 draw calls en cinemática y
   y `Rueda_*`. Los del nodo raíz mueven el vehículo por el paisaje.
 - **Sombras**: la direccional de cinemática reencuadra su cámara de sombras sobre
   el vehículo cada frame; sin eso, el paisaje de 843 m degrada la resolución.
+
+## Modo Desierto — decisiones de diseño
+
+Escenario **generado por código**, sin assets externos. Presupuesto de escenario:
+cielo 1 · estrellas 1 · luna 2 · suelo 1 · asfalto 1 · líneas 1 · bordillos 1 ·
+cactus 1 · piedras 1 = **10 draw calls**. El resto (~260) son los meshes de la
+camioneta, que vienen así del glb.
+
+Sin objetos duplicados:
+
+- **Cactus (90), piedras (140) y bordillos (~160)** son `InstancedMesh`: una
+  geometría y un material por tipo, N matrices. Añadir instancias no añade draw
+  calls.
+- **Líneas discontinuas** (~65 segmentos): un único `BufferGeometry` con los
+  quads escritos a mano en un `Float32Array`.
+- **El cactus** se fusiona de 8 primitivas en una sola geometría al arrancar.
+- **Faros y pilotos** son `InstancedMesh` de 2 instancias cada uno.
+- La camioneta se carga **una vez** mediante el módulo compartido
+  `src/vehicle.ts`, que usan tanto este modo como Modelo.
+
+Otros detalles:
+
+- **Cielo**: domo invertido con gradiente en el fragment shader (tres colores),
+  sin texturas. Sigue a la cámara en Z para que el horizonte no se agote.
+- **Brillo lunar sobre la chapa**: `metalness`/`roughness` reforzados en los
+  materiales `Pintura*` y `Chrome*`, más un **IBL generado con PMREM desde el
+  propio cielo y la luna**. Sin envMap, un material metálico se renderiza negro.
+- **Bucle exacto de 15 s**: `t` se envuelve con `t -= DURATION`, y la recta mide
+  `DURATION × SPEED` = 330 m, así que el reinicio no da salto visible.
+- **Giro de ruedas** derivado de la distancia recorrida
+  (`dist / circunferencia × 2π`), no de un valor arbitrario.
+- **Sombras nítidas**: la cámara de sombras es de solo 32×32 m y viaja con el
+  vehículo en vez de cubrir los 330 m de ruta.
+
+### Gotcha: fusionar geometrías a mano
+
+`toNonIndexed()` **expande** el número de vértices. Dimensionar el `Float32Array`
+con el conteo de la geometría *indexada* y luego copiar la desindexada desborda
+el buffer (`RangeError: offset is out of bounds`). Hay que desindexar primero y
+medir después.

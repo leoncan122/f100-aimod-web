@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createCinematicMode } from './modes/cinematic';
 import { createOrbitMode } from './modes/orbit';
+import { createDesertMode } from './modes/desert';
 import type { ModeId, ViewerMode } from './types';
 
 export function createApp(root: HTMLElement) {
@@ -9,6 +10,7 @@ export function createApp(root: HTMLElement) {
     <div id="tabs">
       <button class="tab on" data-mode="cinematic">Cinemática</button>
       <button class="tab" data-mode="orbit">Modelo</button>
+      <button class="tab" data-mode="desert">Desierto</button>
     </div>
     <div id="stats"></div>
     <div id="hud"></div>
@@ -28,7 +30,7 @@ export function createApp(root: HTMLElement) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   viewport.appendChild(renderer.domElement);
 
   const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 3000);
@@ -53,9 +55,11 @@ export function createApp(root: HTMLElement) {
 
     const deps = { renderer, camera, scene, hud, onProgress };
     try {
-      const next = id === 'cinematic'
-        ? await createCinematicMode(deps)
-        : await createOrbitMode(deps);
+      const factory =
+        id === 'cinematic' ? createCinematicMode
+        : id === 'orbit' ? createOrbitMode
+        : createDesertMode;
+      const next = await factory(deps);
       if (token !== loadToken) {
         next.dispose();
         return;

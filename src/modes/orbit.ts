@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { loadGLTF, disposeObject } from './../loaders';
+import { extractVehicle } from '../vehicle';
 import type { ViewerMode } from './../types';
 
 export interface OrbitDeps {
@@ -53,64 +54,8 @@ export async function createOrbitMode(deps: OrbitDeps): Promise<ViewerMode> {
   onProgress(0, 'Cargando camioneta…');
   const gltf = await loadGLTF('f100.glb', (p) => onProgress(p, 'Cargando camioneta…'));
 
-  // f100.glb trae la escena completa (paisaje de ~843 m). La camioneta es el
-  // subárbol HandlerVehicle005; se extrae conservando su transformada mundial
-  // y el resto se descarta para no pagar el coste del terreno.
-  const VEHICLE_NAMES = ['HandlerVehicle005', 'HandlerVehicle.005'];
-  const vehicle = VEHICLE_NAMES.map((n) => gltf.scene.getObjectByName(n)).find(Boolean);
-
-  const model = new THREE.Group();
-  model.name = 'F100';
-  if (vehicle) {
-    gltf.scene.updateMatrixWorld(true);
-    model.attach(vehicle); // preserva la transformada mundial
-
-    // Liberar el resto SIN tocar recursos compartidos con el vehículo:
-    // materiales/geometrías/texturas se reutilizan entre objetos del glb.
-    const keepGeo = new Set<THREE.BufferGeometry>();
-    const keepMat = new Set<THREE.Material>();
-    const keepTex = new Set<THREE.Texture>();
-    const collect = (root: THREE.Object3D) => {
-      root.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        if (m.geometry) keepGeo.add(m.geometry);
-        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
-          if (!mat) continue;
-          keepMat.add(mat);
-          for (const v of Object.values(mat)) {
-            if (v && (v as THREE.Texture).isTexture) keepTex.add(v as THREE.Texture);
-          }
-        }
-      });
-    };
-    collect(model);
-
-    gltf.scene.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      if (m.geometry && !keepGeo.has(m.geometry)) m.geometry.dispose();
-      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
-        if (!mat || keepMat.has(mat)) continue;
-        for (const v of Object.values(mat)) {
-          const tex = v as THREE.Texture;
-          if (tex?.isTexture && !keepTex.has(tex)) tex.dispose();
-        }
-        mat.dispose();
-      }
-    });
-    gltf.scene.clear();
-  } else {
-    model.add(gltf.scene); // fallback: el glb ya venía recortado
-  }
-
-  model.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (mesh.isMesh) {
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-    }
-  });
+  // f100.glb trae la escena completa (~843 m): se extrae solo el vehículo.
+  const { root: model } = extractVehicle(gltf);
 
   function frame() {
     const box = new THREE.Box3().setFromObject(model);
