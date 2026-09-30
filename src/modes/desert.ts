@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { loadGLTF } from '../loaders';
+import { loadGLTF, MODELS } from '../loaders';
 import { extractVehicle } from '../vehicle';
 import type { ViewerMode } from '../types';
 
@@ -400,7 +400,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
 
   // ───────────────────────── camioneta
   onProgress(0, 'Cargando camioneta…');
-  const gltf = await loadGLTF('f100.glb', (p) => onProgress(p, 'Cargando camioneta…'));
+  const gltf = await loadGLTF(MODELS.truck, (p) => onProgress(p, 'Cargando camioneta…'));
   const { root: truck, wheels, wheelRadius } = extractVehicle(gltf);
 
   // Realce nocturno: la chapa debe captar el brillo de la luna.

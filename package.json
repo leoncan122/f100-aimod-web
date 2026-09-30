@@ -11,15 +11,24 @@
     "export:model": "blender --background \"../../../OneDrive/Documentos/Objetos/blend/f100-aimod_web.blend\" --python scripts/blend_to_glb.py -- public/models/f100-aimod_web.glb",
     "smoke": "node scripts/smoke.mjs",
     "test:grounding": "node scripts/test-grounding.mjs",
-    "smoke:one": "node scripts/smoke-one.mjs"
+    "smoke:one": "node scripts/smoke-one.mjs",
+    "models:optimize": "node scripts/optimize-models.mjs",
+    "models:verify": "node scripts/verify-models.mjs"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.5.1",
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "draco3dgltf": "^1.5.7",
     "puppeteer-core": "^24.43.1",
+    "sharp": "^0.35.5",
     "typescript": "~6.0.2",
     "vite": "^7.3.6"
   },
   "dependencies": {
     "@types/three": "^0.186.0",
     "three": "^0.186.1"
-  }
+  },
+  "homepage": "https://leoncan122.github.io/f100-aimod-web/"
 }

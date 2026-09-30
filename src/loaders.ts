@@ -8,6 +8,18 @@ const draco = new DRACOLoader().setDecoderPath(
 );
 const loader = new GLTFLoader().setDRACOLoader(draco);
 
+/**
+ * Los .glb publicados están optimizados con `npm run models:optimize`
+ * (poda al vehículo + Draco + texturas WebP 1024): 24,7 MB -> 8,3 MB.
+ * `f100-truck.glb` ya viene recortado, pero extractVehicle() sigue siendo
+ * necesario para centrar el modelo y medir el radio de rueda.
+ */
+export const MODELS = {
+  scene: 'escena.glb',
+  truck: 'f100-truck.glb',
+  cameraTrack: 'camara.json',
+} as const;
+
 export const asset = (file: string) => `${import.meta.env.BASE_URL}models/${file}`;
 
 export function loadGLTF(file: string, onProgress?: (pct: number) => void): Promise<GLTF> {

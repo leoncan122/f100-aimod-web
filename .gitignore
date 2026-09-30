@@ -23,8 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 
-# modelos 3D grandes (generados con npm run export:model)
-public/models/*.glb
-public/models/*.gltf
-!public/models/.gitkeep
+# Los .glb optimizados SI se versionan: GitHub Pages sirve desde el repo
+# y pesan 8,5 MB en total (npm run models:optimize los regenera).
+# Los originales sin optimizar y los intermedios, no:
+dist-models/
+public/models/f100.glb
+public/models/escena-raw.glb
 test-results/
+.pages-test/
+.hermes-tmp.*/

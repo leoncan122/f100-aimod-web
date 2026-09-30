@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { loadGLTF, disposeObject } from './../loaders';
+import { loadGLTF, disposeObject, MODELS } from './../loaders';
 import { extractVehicle } from '../vehicle';
 import type { ViewerMode } from './../types';
 
@@ -52,9 +52,9 @@ export async function createOrbitMode(deps: OrbitDeps): Promise<ViewerMode> {
   controls.maxPolarAngle = Math.PI * 0.495;
 
   onProgress(0, 'Cargando camioneta…');
-  const gltf = await loadGLTF('f100.glb', (p) => onProgress(p, 'Cargando camioneta…'));
+  const gltf = await loadGLTF(MODELS.truck, (p) => onProgress(p, 'Cargando camioneta…'));
 
-  // f100.glb trae la escena completa (~843 m): se extrae solo el vehículo.
+  // El glb publicado ya viene podado; extractVehicle centra y mide el rig.
   const { root: model } = extractVehicle(gltf);
 
   function frame() {

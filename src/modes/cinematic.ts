@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
-import { loadGLTF, loadJSON, disposeObject } from '../loaders';
+import { loadGLTF, loadJSON, disposeObject, MODELS } from '../loaders';
 import type { CameraTrack, ViewerMode } from '../types';
 
 export interface CinematicDeps {
@@ -63,8 +63,8 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
 
   onProgress(0, 'Cargando escena…');
   const [gltf, track] = await Promise.all([
-    loadGLTF('escena.glb', (p) => onProgress(p, 'Cargando escena…')),
-    loadJSON<CameraTrack>('camara.json'),
+    loadGLTF(MODELS.scene, (p) => onProgress(p, 'Cargando escena…')),
+    loadJSON<CameraTrack>(MODELS.cameraTrack),
   ]);
 
   scene.add(gltf.scene);

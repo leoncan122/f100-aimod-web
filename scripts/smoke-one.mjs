@@ -33,7 +33,15 @@ try {
   });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message.slice(0, 300)}`));
   const failed = [];
-  page.on('requestfailed', (r) => failed.push(`${r.url()} ${r.failure()?.errorText}`));
+  page.on('requestfailed', (r) => {
+    // three.js usa XHR y Chrome marca la petición como ERR_ABORTED cuando el
+    // loader la cierra tras completarla. Si la respuesta llegó con 200, no es
+    // un fallo real; solo se registran los recursos que de verdad no llegaron.
+    const err = r.failure()?.errorText ?? '';
+    const status = r.response()?.status();
+    if (err === 'net::ERR_ABORTED' && status && status < 400) return;
+    failed.push(`${r.url()} ${err}`);
+  });
 
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
 
