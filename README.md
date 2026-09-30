@@ -128,3 +128,25 @@ Otros detalles:
 con el conteo de la geometría *indexada* y luego copiar la desindexada desborda
 el buffer (`RangeError: offset is out of bounds`). Hay que desindexar primero y
 medir después.
+
+### Gotcha: apoyar el vehículo en el suelo
+
+Alinear con `box.min.y` (el `Box3` del conjunto) **no** apoya las ruedas:
+
+- El punto más bajo del vehículo no es el neumático, sino la **suspensión/frenos**,
+  unos **14 cm por debajo** del contacto real.
+- Ese mínimo **oscila hasta 14 cm** al girar las ruedas, porque la llanta no es un
+  cilindro perfecto: el coche subiría y bajaría solo por animar el giro.
+
+`extractVehicle()` alinea por el **contacto real**: por cada nodo `ROT_Rueda_*`
+toma su eje de giro y le resta el **radio del neumático**, medido como la
+distancia máxima del eje a sus vértices en el plano perpendicular (X local → YZ).
+Un `Box3` del nodo tampoco sirve para el radio — engloba los frenos y da 0,52 m
+en vez de los 0,37 m reales (41 % de error, que también hacía patinar las ruedas).
+
+Al colocar el vehículo hay que sumar además la altura del asfalto (`ROAD_Y`),
+que va 2 cm sobre el terreno para evitar z-fighting, y mantener el bamboleo de
+suspensión **no negativo** y de amplitud pequeña (≤ 4 mm).
+
+`npm run test:grounding` verifica el hueco en 8 instantes del bucle y falla si
+supera ±5 mm. Peor caso actual: **2,2 mm**.

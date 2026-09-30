@@ -17,7 +17,6 @@ const SPEED = 22; // m/s (~80 km/h)
 const DISTANCE = DURATION * SPEED; // 330 m de recta
 const ROAD_HALF = 4.2; // semiancho del asfalto
 const CURB_W = 0.9;
-const WHEEL_R = 0.52;
 const MARGIN = 160; // holgura de terreno delante y detrás
 const ROAD_Y = 0.02; // el asfalto va 2 cm sobre el terreno (evita z-fighting)
 
@@ -402,7 +401,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   // ───────────────────────── camioneta
   onProgress(0, 'Cargando camioneta…');
   const gltf = await loadGLTF('f100.glb', (p) => onProgress(p, 'Cargando camioneta…'));
-  const { root: truck, wheels } = extractVehicle(gltf);
+  const { root: truck, wheels, wheelRadius } = extractVehicle(gltf);
 
   // Realce nocturno: la chapa debe captar el brillo de la luna.
   truck.traverse((o) => {
@@ -476,7 +475,9 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   // ───────────────────────── animación
   let t = 0;
   let playing = true;
-  const wheelCirc = 2 * Math.PI * WHEEL_R;
+  // Circunferencia a partir del radio REAL medido en el rig (≈0.37 m), no de
+  // una constante: con un radio inflado las ruedas patinan visiblemente.
+  const wheelCirc = 2 * Math.PI * wheelRadius;
 
   const truckPos = new THREE.Vector3();
   const lookAt = new THREE.Vector3();
@@ -534,9 +535,14 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
       const z = MARGIN * 0.5 - (t / DURATION) * DISTANCE;
       // bamboleo sutil de suspensión; ROAD_Y apoya los neumáticos sobre el
       // asfalto (está 2 cm por encima del terreno), no sobre el terreno.
-      const bob = Math.sin(t * 7.3) * 0.012 + Math.sin(t * 3.1) * 0.008;
+      // Bamboleo de suspensión: oscila en [0, 4 mm] — nunca negativo (hundiría
+      // los neumáticos) y de amplitud pequeña, o el coche parece flotar.
+      const bob = ((Math.sin(t * 7.3) + Math.sin(t * 3.1) * 0.6) * 0.5 + 0.8) * 0.0025;
       truck.position.set(0, ROAD_Y + bob, z);
-      truck.rotation.z = Math.sin(t * 2.7) * 0.006;
+      // Balanceo lateral mínimo. Cada radián inclina el eje (ancho ~2.1 m), lo
+      // que eleva una rueda ~1.05 m·sen(θ); con 0.0025 rad son 2.6 mm, dentro
+      // del margen del bamboleo, así que ninguna rueda despega del asfalto.
+      truck.rotation.z = Math.sin(t * 2.7) * 0.0025;
       truckPos.copy(truck.position);
 
       // ruedas: giro real según distancia recorrida

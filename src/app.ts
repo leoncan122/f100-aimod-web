@@ -52,6 +52,8 @@ export function createApp(root: HTMLElement) {
     mode?.dispose();
     mode = null;
     scene = new THREE.Scene();
+    // Solo en dev: permite a los scripts de test medir la escena viva.
+    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__scene = scene;
 
     const deps = { renderer, camera, scene, hud, onProgress };
     try {

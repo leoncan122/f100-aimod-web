@@ -11,6 +11,35 @@ export interface Vehicle {
   /** Nodos PIV_Dir_* — pivotes de dirección (giro Y). */
   steering: THREE.Object3D[];
   size: THREE.Vector3;
+  /** Radio real del neumático (m), medido desde el eje de giro. */
+  wheelRadius: number;
+}
+
+/**
+ * Radio real de una rueda: distancia máxima del eje de giro a sus vértices,
+ * medida en el plano perpendicular al eje (X local → plano YZ).
+ *
+ * No sirve un Box3 del nodo: engloba frenos y suspensión, que sobresalen por
+ * detrás del neumático y dan un radio inflado (0.52 m en vez de 0.37 m).
+ */
+function measureWheelRadius(node: THREE.Object3D): number {
+  const inv = new THREE.Matrix4().copy(node.matrixWorld).invert();
+  const p = new THREE.Vector3();
+  let rMax = 0;
+  node.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const pa = mesh.geometry?.attributes.position as THREE.BufferAttribute | undefined;
+    if (!pa) return;
+    for (let i = 0; i < pa.count; i++) {
+      p.fromBufferAttribute(pa, i);
+      mesh.localToWorld(p);
+      p.applyMatrix4(inv);
+      const r = Math.hypot(p.y, p.z);
+      if (r > rMax) rMax = r;
+    }
+  });
+  return rMax;
 }
 
 /**
@@ -74,17 +103,37 @@ export function extractVehicle(gltf: GLTF): Vehicle {
     }
   });
 
-  // Centrar en el origen, apoyado en Y=0, para poder colocarlo en cualquier escena.
+  // Centrar en el origen. En Y se alinea por el CONTACTO DE LAS RUEDAS
+  // (eje de giro − radio real), no por el Box3 del conjunto: ese bbox lo
+  // define la pieza más baja (suspensión/frenos, ~14 cm por debajo del
+  // neumático) y además oscila hasta 14 cm al girar las ruedas, porque la
+  // llanta no es un cilindro perfecto. Alinear por contacto deja el
+  // vehículo apoyado y estable durante toda la animación.
   root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(root);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
+
+  let wheelRadius = 0;
+  let contactY = box.min.y; // fallback si el rig no trae ruedas
+  if (wheels.length) {
+    const wp = new THREE.Vector3();
+    let lowest = Infinity;
+    for (const w of wheels) {
+      const r = measureWheelRadius(w);
+      if (r > wheelRadius) wheelRadius = r;
+      w.getWorldPosition(wp);
+      lowest = Math.min(lowest, wp.y - r);
+    }
+    contactY = lowest;
+  }
+
   const inner = root.children[0];
   if (inner) {
     inner.position.x -= center.x;
-    inner.position.y -= box.min.y;
+    inner.position.y -= contactY;
     inner.position.z -= center.z;
   }
 
-  return { root, wheels, steering, size };
+  return { root, wheels, steering, size, wheelRadius };
 }

@@ -9,7 +9,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "export:model": "blender --background \"../../../OneDrive/Documentos/Objetos/blend/f100-aimod_web.blend\" --python scripts/blend_to_glb.py -- public/models/f100-aimod_web.glb",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test:grounding": "node scripts/test-grounding.mjs",
+    "smoke:one": "node scripts/smoke-one.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "^24.43.1",
