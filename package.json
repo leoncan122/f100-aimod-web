@@ -8,9 +8,11 @@
     "lint": "tsc --noEmit",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "export:model": "blender --background \"../../../OneDrive/Documentos/Objetos/blend/f100-aimod_web.blend\" --python scripts/blend_to_glb.py -- public/models/f100-aimod_web.glb"
+    "export:model": "blender --background \"../../../OneDrive/Documentos/Objetos/blend/f100-aimod_web.blend\" --python scripts/blend_to_glb.py -- public/models/f100-aimod_web.glb",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
+    "puppeteer-core": "^24.43.1",
     "typescript": "~6.0.2",
     "vite": "^7.3.6"
   },

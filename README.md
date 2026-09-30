@@ -1,72 +1,87 @@
 # f100-aimod-web
 
-Visor 3D del modelo Blender **`f100-aimod_web.blend`** (Ford F100) montado con **three.js** + **Vite** + **TypeScript**.
+Visor 3D del proyecto Blender **F100** montado con **three.js** + **Vite** + **TypeScript**.
+
+Dos modos, conmutables desde las pestañas superiores:
+
+- **Cinemática** — la escena completa (`escena.glb`) con las 119 animaciones horneadas
+  y el track de cámara de Blender (`camara.json`: posición, rotación y FOV horizontal
+  por frame, 24 fps, 1700 frames ≈ 71 s). Play/pausa, barra de scrub y cámara libre.
+- **Modelo** — inspección orbital solo de la camioneta, extraída del subárbol
+  `HandlerVehicle005`. Auto-rotación, wireframe, reencuadre y dimensiones reales.
 
 ## Stack
 
-- three.js `^0.186` (GLTFLoader, DRACOLoader, OrbitControls, RoomEnvironment)
-- TypeScript (strict)
+- three.js `^0.186` — GLTFLoader + DRACOLoader, OrbitControls, Sky, PMREMGenerator
+- TypeScript strict
 - Vite 7
 
-## Origen del modelo
+## Assets
 
-`C:\Users\leonc\OneDrive\Documentos\Objetos\blend\f100-aimod_web.blend` (~46 MB)
+Viven en `public/models/` y están en `.gitignore` (binarios grandes):
 
-three.js no lee `.blend` directamente: hay que exportar a **glTF/GLB** (con compresión Draco).
+| archivo | tamaño | contenido |
+|---|---|---|
+| `escena.glb` | 14,5 MB | escena completa animada |
+| `f100.glb` | 11,5 MB | misma escena; se extrae solo el vehículo |
+| `camara.json` | 115 KB | track de cámara horneado |
 
-### Exportar el modelo
+Origen: `OneDrive\Documentos\Objetos\web_f100\`, exportados desde
+`Objetos\blend\f100-aimod_web.blend`.
 
-Requiere Blender instalado y en el `PATH`:
+### Regenerar desde el .blend
 
 ```bash
-npm run export:model
+npm run export:model   # requiere blender en el PATH
 ```
 
-Eso ejecuta:
-
-```bash
-blender --background "<ruta>/f100-aimod_web.blend" \
-  --python scripts/blend_to_glb.py -- public/models/f100-aimod_web.glb
-```
-
-Alternativa manual: abrir el `.blend` en Blender → *File ▸ Export ▸ glTF 2.0 (.glb)*
-con **+Y up**, **Apply Modifiers** y **Draco compression** activados, guardando en
-`public/models/f100-aimod_web.glb`.
-
-El `.glb` está en `.gitignore` (asset binario grande) — se regenera con el script.
+three.js no lee `.blend`: hay que exportar a glTF/GLB con **+Y up**,
+**Apply Modifiers** y **Draco** activados.
 
 ## Uso
 
 ```bash
 npm install
-npm run dev      # servidor de desarrollo
+npm run dev      # http://127.0.0.1:5173
 npm run lint     # tsc --noEmit
 npm run build    # tsc + vite build -> dist/
-npm run preview
+npm run smoke    # test de humo en Chrome headless (requiere dev server activo)
 ```
 
 ## Controles
 
-- Arrastrar: orbitar
-- Rueda: zoom
-- Click derecho: desplazar
-- `R`: auto-rotación
-- `F`: reencuadrar el modelo
+**Cinemática**: `Espacio` play/pausa · barra de scrub · botón *Cámara libre* para
+orbitar alrededor del vehículo.
+**Modelo**: arrastrar orbita · rueda zoom · `R` auto-rotar · `F` reencuadrar.
 
-## Estructura
+## Tests
 
-```
-src/
-  main.ts      # bootstrap de la UI
-  viewer.ts    # escena three.js: renderer, luces, IBL, carga glTF, encuadre automático
-  style.css
-scripts/
-  blend_to_glb.py   # exportador headless Blender -> GLB
-public/models/      # destino del .glb (ignorado por git)
-```
+`scripts/smoke.mjs` levanta Chrome real (ANGLE/SwiftShader), carga ambos modos,
+espera a que el overlay de carga desaparezca y comprueba:
 
-## Notas técnicas
+- cero errores de consola y cero peticiones fallidas;
+- que el canvas renderiza (fps, draw calls, triángulos);
+- **regresión de bbox**: en modo Modelo el vehículo debe medir < 8 m en su eje
+  mayor. Si un clip del rig raíz se cuela en el mixer, el bbox se dispara a ~25 m
+  y el test falla.
 
-- Tone mapping ACES Filmic + `PMREMGenerator` sobre `RoomEnvironment` para IBL sin cargar HDRIs externos.
-- Encuadre automático: se calcula el `Box3` del modelo, se centra en el origen y se ajustan cámara, sombras y grid a su escala — funciona con cualquier tamaño de exportación.
-- Decoder Draco servido desde el CDN de gstatic.
+Capturas en `test-results/`.
+
+Resultado actual: ambos modos OK, ~2,97 M tris / 495 draw calls en cinemática y
+~1,78 M tris / 383 draw calls en modelo (bajo SwiftShader, sin GPU).
+
+## Notas de implementación
+
+- **Iluminación**: la de Cycles no se exporta en glTF. Cinemática la recrea con
+  `Sky` procedural + PMREM como IBL y una direccional que sigue a la camioneta.
+  Modelo usa `RoomEnvironment` como IBL de estudio.
+- **Agua**: el shader procedural del lago tampoco se exporta; `Lago_*` recibe un
+  `MeshPhysicalMaterial` azul.
+- **Extracción del vehículo**: `f100.glb` contiene el paisaje entero (~843 m).
+  Se usa `Group.attach()` para conservar la transformada mundial y luego se
+  liberan geometrías/materiales/texturas del resto **excluyendo los compartidos**
+  con el vehículo (un dispose indiscriminado rompe los materiales de la camioneta).
+- **Filtro de animaciones en modo Modelo**: solo clips `ROT_Rueda_*`, `PIV_Dir_*`
+  y `Rueda_*`. Los del nodo raíz mueven el vehículo por el paisaje.
+- **Sombras**: la direccional de cinemática reencuadra su cámara de sombras sobre
+  el vehículo cada frame; sin eso, el paisaje de 843 m degrada la resolución.
