@@ -1,0 +1,21 @@
+{
+  "name": "f100-aimod-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "lint": "tsc --noEmit",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "export:model": "blender --background \"../../../OneDrive/Documentos/Objetos/blend/f100-aimod_web.blend\" --python scripts/blend_to_glb.py -- public/models/f100-aimod_web.glb"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "@types/three": "^0.186.0",
+    "three": "^0.186.1"
+  }
+}
