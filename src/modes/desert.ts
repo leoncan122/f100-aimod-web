@@ -16,24 +16,163 @@ const DURATION = 15; // s — duración exacta del bucle
 const SPEED = 22; // m/s (~80 km/h)
 const DISTANCE = DURATION * SPEED; // 330 m de recta
 const ROAD_HALF = 4.2; // semiancho del asfalto
-const CURB_W = 0.9;
+const SHOULDER = 0.9; // banquina: separación mínima de la vegetación al asfalto
+const EDGE_INSET = 0.3; // distancia del borde del asfalto a la línea blanca
+const EDGE_W = 0.18; // ancho de la línea blanca lateral
 const MARGIN = 160; // holgura de terreno delante y detrás
 const ROAD_Y = 0.02; // el asfalto va 2 cm sobre el terreno (evita z-fighting)
 
 const COL_SAND = 0x8a3a1c;
 const COL_SAND_DARK = 0x51200f;
-const COL_ASPHALT = 0x101018;
-const COL_CURB = 0x8d8275;
+const COL_ASPHALT = 0x3c3936; // asfalto viejo, gris parduzco (no negro brillante)
 const COL_CACTUS = 0x3d6236;
+
+/**
+ * Texturas procedurales de asfalto viejo (albedo + rugosidad + normales).
+ *
+ * Se generan en un canvas 512×512 sin ficheros externos: grano grueso, parches
+ * de bacheo, grietas y roderas desgastadas. La rugosidad se deriva del mismo
+ * grano y se mantiene muy alta (0.82–1.0) para que el camino NO brille: un
+ * asfalto envejecido es prácticamente lambertiano.
+ */
+function buildAsphaltTextures(repeatY: number): {
+  map: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
+  normalMap: THREE.CanvasTexture;
+} {
+  const S = 512;
+  // PRNG con semilla propia: textura idéntica en cada recarga y en los tests.
+  let s = 20260101;
+  const r = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+
+  const make = () => {
+    const c = document.createElement('canvas');
+    c.width = S;
+    c.height = S;
+    return { c, x: c.getContext('2d')! };
+  };
+
+  // ── albedo
+  const { c: albedo, x: a } = make();
+  // El tono del asfalto lo define la textura (el material va en blanco), así
+  // que el gris base es ya el color final: hormigón asfáltico envejecido.
+  a.fillStyle = `#${COL_ASPHALT.toString(16).padStart(6, '0')}`;
+  a.fillRect(0, 0, S, S);
+
+  // parches de bacheo (rectángulos algo más claros/oscuros, bordes difusos)
+  for (let i = 0; i < 26; i++) {
+    const w = 40 + r() * 150;
+    const h = 30 + r() * 120;
+    const l = 24 + r() * 26;
+    a.globalAlpha = 0.16 + r() * 0.22;
+    a.fillStyle = `rgb(${l},${l - 2},${l - 4})`;
+    a.fillRect(r() * S - w / 2, r() * S - h / 2, w, h);
+  }
+  a.globalAlpha = 1;
+
+  // grano: piedrecillas del árido
+  const img = a.getImageData(0, 0, S, S);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (r() - 0.5) * 38;
+    d[i] = Math.max(0, Math.min(255, d[i]! + n));
+    d[i + 1] = Math.max(0, Math.min(255, d[i + 1]! + n));
+    d[i + 2] = Math.max(0, Math.min(255, d[i + 2]! + n * 0.9));
+  }
+  a.putImageData(img, 0, 0);
+
+  // roderas: dos bandas desgastadas y algo más claras donde pasan las ruedas
+  for (const cx of [S * 0.3, S * 0.7]) {
+    const g = a.createLinearGradient(cx - 46, 0, cx + 46, 0);
+    g.addColorStop(0, 'rgba(120,114,105,0)');
+    g.addColorStop(0.5, 'rgba(120,114,105,0.16)');
+    g.addColorStop(1, 'rgba(120,114,105,0)');
+    a.fillStyle = g;
+    a.fillRect(cx - 46, 0, 92, S);
+  }
+
+  // grietas: polilíneas oscuras, algunas ramificadas
+  a.lineCap = 'round';
+  for (let i = 0; i < 34; i++) {
+    a.strokeStyle = `rgba(14,13,12,${0.35 + r() * 0.45})`;
+    a.lineWidth = 0.7 + r() * 1.9;
+    let px = r() * S;
+    let py = r() * S;
+    a.beginPath();
+    a.moveTo(px, py);
+    const steps = 4 + Math.floor(r() * 8);
+    for (let k = 0; k < steps; k++) {
+      px += (r() - 0.5) * 60;
+      py += (r() - 0.5) * 60;
+      a.lineTo(px, py);
+    }
+    a.stroke();
+  }
+
+  // ── rugosidad: SOLO valores altos. Three.js lee el canal verde y lo
+  // multiplica por `roughness`; pintar aquí el albedo (oscuro) bajaría la
+  // rugosidad y convertiría el camino en un espejo — justo lo que hay que
+  // evitar. Rango 235–255 → roughness 0.92–1.0: mate en toda la superficie.
+  const { c: rough, x: q } = make();
+  const rImg = q.createImageData(S, S);
+  const rd = rImg.data;
+  for (let i = 0; i < rd.length; i += 4) {
+    const v = 235 + Math.floor(r() * 21);
+    rd[i] = rd[i + 1] = rd[i + 2] = v;
+    rd[i + 3] = 255;
+  }
+  q.putImageData(rImg, 0, 0);
+
+  // ── normales: Sobel sobre la luminancia del albedo (relieve del árido)
+  const { c: normal, x: n } = make();
+  const nImg = n.createImageData(S, S);
+  const nd = nImg.data;
+  const lum = (px: number, py: number) => {
+    const i = ((py & (S - 1)) * S + (px & (S - 1))) * 4;
+    return (d[i]! * 0.3 + d[i + 1]! * 0.59 + d[i + 2]! * 0.11) / 255;
+  };
+  const STRENGTH = 2.2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const dx = (lum(x + 1, y) - lum(x - 1, y)) * STRENGTH;
+      const dy = (lum(x, y + 1) - lum(x, y - 1)) * STRENGTH;
+      const len = Math.hypot(dx, dy, 1);
+      const i = (y * S + x) * 4;
+      nd[i] = ((-dx / len) * 0.5 + 0.5) * 255;
+      nd[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
+      nd[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
+      nd[i + 3] = 255;
+    }
+  }
+  n.putImageData(nImg, 0, 0);
+
+  const tex = (canvas: HTMLCanvasElement, srgb: boolean) => {
+    const t = new THREE.CanvasTexture(canvas);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1, repeatY);
+    t.anisotropy = 8;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+
+  return {
+    map: tex(albedo, true),
+    roughnessMap: tex(rough, false),
+    normalMap: tex(normal, false),
+  };
+}
 
 /**
  * Recta de desierto al anochecer, generada íntegramente con three.js.
  * Del glb solo se usa la camioneta (módulo compartido `extractVehicle`).
  *
  * Presupuesto de escenario: cielo 1 · estrellas 1 · luna 2 · suelo 1 ·
- * asfalto 1 · líneas 1 · bordillos 1 · cactus 1 · piedras 1 = 10 draw calls.
- * Sin objetos duplicados: cactus, piedras y bordillos son InstancedMesh que
- * comparten una geometría y un material.
+ * asfalto 1 · líneas centrales 1 · líneas de borde 1 · cactus 1 · piedras 1 =
+ * 10 draw calls. Sin objetos duplicados: cactus y piedras son InstancedMesh
+ * que comparten una geometría y un material; las líneas se fusionan a mano.
  */
 export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   const { renderer, camera, scene, hud, onProgress } = deps;
@@ -113,14 +252,52 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   scene.add(stars);
 
   // ───────────────────────── luna grande y redonda + halo
-  const MOON_DIR = new THREE.Vector3(-0.45, 0.26, -1).normalize();
-  const moonPos = MOON_DIR.clone().multiplyScalar(640);
+  // La dirección horizontal de la luna se adapta al encuadre: en móvil el FOV
+  // horizontal se estrecha muchísimo (la vertical es la fija), así que un
+  // offset X fijo la empujaba fuera de cuadro. Se calcula como una fracción
+  // del semiángulo horizontal real para que quede siempre dentro, desplazada
+  // hacia la izquierda pero visible.
+  const MOON_DIST = 640;
+  const MOON_R = 48; // radio de la geometría; en pantallas estrechas se escala
+  const MOON_Y = 0.26; // altura deseada sobre el horizonte (tangente)
+  // Las cámaras fijas miran algo hacia abajo (~0.1 rad), lo que sube la luna en
+  // pantalla; se descuenta al calcular cuánto sitio queda por arriba.
+  const MOON_PITCH = 0.1;
+  const MOON_PAD = 0.03; // margen libre entre el disco y el borde del encuadre
+  const moonPos = new THREE.Vector3();
+  const MOON_DIR = new THREE.Vector3(-0.3, MOON_Y, -1).normalize();
+  let moonScale = 1;
+
+  /**
+   * Reencuadra la luna según la relación de aspecto actual.
+   *
+   * En móvil el FOV horizontal se estrecha mucho (el fijo es el vertical), así
+   * que el desplazamiento fijo en X la sacaba de cuadro por el lateral. Aquí
+   * tanto el desplazamiento como el tamaño del disco se expresan como fracción
+   * del semiángulo horizontal real: la luna queda siempre entera y a la
+   * izquierda, más pequeña cuanto más estrecho es el encuadre.
+   */
+  const updateMoonDir = () => {
+    const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    const tanH = tanV * camera.aspect;
+    const x = tanH * 0.45;
+    // el disco ocupa como mucho el 30 % del semiancho visible
+    moonScale = Math.min(1, (tanH * MOON_DIST * 0.3) / MOON_R);
+    // ...y su borde superior nunca rebasa el encuadre (radio angular incluido)
+    const angR = (MOON_R * moonScale) / MOON_DIST;
+    const y = Math.max(0.08, Math.min(MOON_Y, tanV - angR - MOON_PAD - MOON_PITCH));
+    MOON_DIR.set(-x, y, -1).normalize();
+    moonPos.copy(MOON_DIR).multiplyScalar(MOON_DIST);
+  };
+  // el fov definitivo se fija más abajo; se recalcula allí y en cada resize
+  updateMoonDir();
 
   const moon = new THREE.Mesh(
-    keep(new THREE.SphereGeometry(48, 48, 32)),
+    keep(new THREE.SphereGeometry(MOON_R, 48, 32)),
     keep(new THREE.MeshBasicMaterial({ color: 0xf6f3e6, fog: false })),
   );
   moon.position.copy(moonPos);
+  moon.scale.setScalar(moonScale);
   moon.renderOrder = -1;
   scene.add(moon);
 
@@ -148,6 +325,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
     ),
   );
   halo.position.copy(moonPos);
+  halo.scale.setScalar(moonScale);
   halo.renderOrder = -1;
   scene.add(halo);
 
@@ -194,10 +372,31 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // ───────────────────────── asfalto
+  // ───────────────────────── asfalto viejo
+  // La textura se repite a lo largo de Z una vez cada 8 m: a esa escala el
+  // grano queda del tamaño real del árido sin que se note el tiling.
+  const ROAD_LEN = DISTANCE + MARGIN * 2;
+  const asphalt = buildAsphaltTextures(ROAD_LEN / 8);
+  keep(asphalt.map);
+  keep(asphalt.roughnessMap);
+  keep(asphalt.normalMap);
   const road = new THREE.Mesh(
-    keep(new THREE.PlaneGeometry(ROAD_HALF * 2, DISTANCE + MARGIN * 2)),
-    keep(new THREE.MeshStandardMaterial({ color: COL_ASPHALT, roughness: 0.72, metalness: 0.05 })),
+    keep(new THREE.PlaneGeometry(ROAD_HALF * 2, ROAD_LEN)),
+    keep(
+      new THREE.MeshStandardMaterial({
+        // Blanco: el tono lo aporta íntegramente la textura de asfalto viejo.
+        color: 0xffffff,
+        map: asphalt.map,
+        roughnessMap: asphalt.roughnessMap,
+        normalMap: asphalt.normalMap,
+        normalScale: new THREE.Vector2(0.45, 0.45),
+        // Asfalto envejecido: mate y sin componente metálica, y con el reflejo
+        // del entorno anulado — antes el camino espejeaba la luna y el cielo.
+        roughness: 1,
+        metalness: 0,
+        envMapIntensity: 0,
+      }),
+    ),
   );
   road.rotation.x = -Math.PI / 2;
   road.position.set(0, 0.02, -DISTANCE / 2);
@@ -247,28 +446,49 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   dashes.position.z = 0;
   scene.add(dashes);
 
-  // ───────────────────────── acera / bordillo (InstancedMesh, ambos lados)
-  const CURB_SEG = 4; // longitud de cada bloque
-  const curbPerSide = Math.ceil(totalLen / CURB_SEG);
-  const curbCount = curbPerSide * 2;
-  const curbGeo = keep(new THREE.BoxGeometry(CURB_W, 0.28, CURB_SEG * 0.97));
-  const curbMat = keep(
-    new THREE.MeshStandardMaterial({ color: COL_CURB, roughness: 0.9, metalness: 0 }),
-  );
-  const curbs = new THREE.InstancedMesh(curbGeo, curbMat, curbCount);
-  curbs.castShadow = true;
-  curbs.receiveShadow = true;
-  const m4 = new THREE.Matrix4();
+  // ───────────────────────── líneas blancas continuas de borde
+  // Sustituyen a los antiguos bloques/bordillos laterales: solo dos franjas
+  // planas que delimitan el asfalto. Ambas van en una única geometría → 1 draw
+  // call, y a 0.5 cm sobre el asfalto para evitar z-fighting.
+  const edgePos = new Float32Array(2 * 6 * 3);
+  const edgeUv = new Float32Array(2 * 6 * 2);
+  const z0 = MARGIN;
+  const z1 = MARGIN - totalLen;
   for (let s = 0; s < 2; s++) {
-    const x = (s === 0 ? -1 : 1) * (ROAD_HALF + CURB_W / 2);
-    for (let i = 0; i < curbPerSide; i++) {
-      const z = MARGIN - i * CURB_SEG - CURB_SEG / 2;
-      m4.makeTranslation(x, 0.14, z);
-      curbs.setMatrixAt(s * curbPerSide + i, m4);
+    const cx = (s === 0 ? -1 : 1) * (ROAD_HALF - EDGE_INSET - EDGE_W / 2);
+    const xa = cx - EDGE_W / 2;
+    const xb = cx + EDGE_W / 2;
+    const quad = [
+      [xa, z0], [xb, z0], [xb, z1],
+      [xa, z0], [xb, z1], [xa, z1],
+    ];
+    for (let k = 0; k < 6; k++) {
+      const o = (s * 6 + k) * 3;
+      edgePos[o] = quad[k]![0]!;
+      edgePos[o + 1] = 0;
+      edgePos[o + 2] = quad[k]![1]!;
     }
   }
-  curbs.instanceMatrix.needsUpdate = true;
-  scene.add(curbs);
+  const edgeGeo = keep(new THREE.BufferGeometry());
+  edgeGeo.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
+  edgeGeo.setAttribute('uv', new THREE.BufferAttribute(edgeUv, 2));
+  edgeGeo.computeVertexNormals();
+  const edgeLines = new THREE.Mesh(
+    edgeGeo,
+    keep(
+      new THREE.MeshStandardMaterial({
+        color: 0xe8e4d6,
+        roughness: 0.92,
+        metalness: 0,
+        emissive: 0x26231a,
+        envMapIntensity: 0.1,
+      }),
+    ),
+  );
+  edgeLines.position.y = 0.035;
+  scene.add(edgeLines);
+
+  const m4 = new THREE.Matrix4();
 
   // ───────────────────────── cactus (una geometría, InstancedMesh)
   // Saguaro: tronco + dos brazos, fusionados en un único BufferGeometry.
@@ -348,7 +568,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   const pv = new THREE.Vector3();
   for (let i = 0; i < CACTI; i++) {
     const side = i % 2 === 0 ? -1 : 1;
-    const off = ROAD_HALF + CURB_W + 2.5 + rnd() * 26;
+    const off = ROAD_HALF + SHOULDER + 2.5 + rnd() * 26;
     const s = 0.65 + rnd() * 0.85;
     const sy = s * (0.85 + rnd() * 0.4);
     // -0.15 hunde ligeramente la base: evita que floten sobre el terreno
@@ -372,7 +592,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   rocks.receiveShadow = true;
   for (let i = 0; i < ROCKS; i++) {
     const side = i % 2 === 0 ? -1 : 1;
-    const off = ROAD_HALF + CURB_W + 0.6 + rnd() * 34;
+    const off = ROAD_HALF + SHOULDER + 0.6 + rnd() * 34;
     pv.set(side * off, 0.05, MARGIN - rnd() * (totalLen - 4));
     q.setFromEuler(new THREE.Euler(rnd() * 3, rnd() * 3, rnd() * 3));
     const s = 0.2 + rnd() * 0.5;
@@ -423,19 +643,27 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
 
   // Faros: dos conos de luz. SpotLight sin sombras (coste bajo) + dos discos
   // emisivos como "cristal" encendido, instanciados en una sola malla.
+  // Intensidad alta y penumbra baja: el haz debe llegar lejos y marcarse sobre
+  // el asfalto mate, que ya no devuelve brillo especular.
   const makeHeadlight = (x: number) => {
-    const sp = new THREE.SpotLight(0xffe7c2, 26, 55, Math.PI / 7, 0.45, 1.4);
+    const sp = new THREE.SpotLight(0xffe9c8, 95, 110, Math.PI / 5.6, 0.32, 1.1);
     sp.position.set(x, 0.85, -2.25);
-    sp.target.position.set(x * 1.2, 0.1, -22);
+    sp.target.position.set(x * 1.2, 0.1, -30);
     truck.add(sp, sp.target);
     return sp;
   };
   const hlL = makeHeadlight(-0.62);
   const hlR = makeHeadlight(0.62);
 
+  // Derrame cercano: ilumina el asfalto justo delante del paragolpes, donde el
+  // cono de los faros aún no ha abierto.
+  const hlFill = new THREE.PointLight(0xffe3b4, 14, 16, 1.6);
+  hlFill.position.set(0, 0.7, -3.4);
+  truck.add(hlFill);
+
   const glowGeo = keep(new THREE.CircleGeometry(0.17, 16));
   const glowMat = keep(
-    new THREE.MeshBasicMaterial({ color: 0xfff0d0, fog: false, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color: 0xfffaf0, fog: false, side: THREE.DoubleSide }),
   );
   const glows = new THREE.InstancedMesh(glowGeo, glowMat, 2);
   for (let i = 0; i < 2; i++) {
@@ -468,6 +696,10 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   camera.near = 0.2;
   camera.far = 2000;
   camera.updateProjectionMatrix();
+  updateMoonDir();
+  moon.scale.setScalar(moonScale);
+  halo.scale.setScalar(moonScale);
+  let lastAspect = camera.aspect;
 
   type CamId = 'persecucion' | 'lateral' | 'cofre' | 'libre';
   let cam: CamId = 'persecucion';
@@ -556,6 +788,13 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
       dusk.target.position.copy(truckPos);
 
       // el domo y la luna acompañan a la cámara: horizonte siempre lejano
+      // si cambia el encuadre (resize / rotar el móvil) se reencuadra la luna
+      if (camera.aspect !== lastAspect) {
+        lastAspect = camera.aspect;
+        updateMoonDir();
+        moon.scale.setScalar(moonScale);
+        halo.scale.setScalar(moonScale);
+      }
       sky.position.set(0, 0, truckPos.z);
       stars.position.set(0, 0, truckPos.z);
       moon.position.copy(moonPos).add(new THREE.Vector3(0, 0, truckPos.z));
@@ -592,7 +831,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
     dispose() {
       window.removeEventListener('keydown', onKey);
       controls.dispose();
-      scene.remove(sky, stars, moon, halo, ground, road, dashes, curbs, cacti, rocks, truck);
+      scene.remove(sky, stars, moon, halo, ground, road, dashes, edgeLines, cacti, rocks, truck);
       scene.remove(moonLight, moonLight.target, bounce, dusk, dusk.target);
       hlL.dispose?.();
       hlR.dispose?.();
@@ -608,7 +847,6 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
           mat.dispose();
         }
       });
-      curbs.dispose();
       cacti.dispose();
       rocks.dispose();
       glows.dispose();
