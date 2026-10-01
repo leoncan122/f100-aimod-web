@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { loadGLTF, MODELS } from '../loaders';
 import { extractVehicle } from '../vehicle';
+import { createCameraPeek } from '../camera-peek';
 import type { ViewerMode } from '../types';
 
 export interface DesertDeps {
@@ -685,12 +687,66 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   tails.instanceMatrix.needsUpdate = true;
   truck.add(tails);
 
+  // ────────── iluminación de la zaga (encuadre por defecto)
+  // La cámara de persecución mira la trasera de la camioneta, que es justo la
+  // cara opuesta a la luna: quedaba casi en silueta. Se monta un esquema de tres
+  // puntos solidario al vehículo (se mueve con él, así que el encuadre es
+  // idéntico en todo el recorrido), con luces de área rectangulares — el
+  // equivalente a paneles de plató: caída suave y reflejos alargados en la
+  // chapa, mucho más creíble en una superficie metálica que un foco puntual.
+  //
+  // RectAreaLight no proyecta sombras ni necesita mapa, así que el coste es
+  // despreciable; requiere el LUT de uniforms, que se inicializa una vez.
+  RectAreaLightUniformsLib.init();
+
+  const rig = new THREE.Group();
+  truck.add(rig);
+
+  /** Panel de área apuntado al centro de la caja de carga. */
+  const makePanel = (
+    color: number,
+    intensity: number,
+    w: number,
+    h: number,
+    pos: [number, number, number],
+  ) => {
+    const l = new THREE.RectAreaLight(color, intensity, w, h);
+    l.position.set(...pos);
+    l.lookAt(0, 1.1, 2.1);
+    rig.add(l);
+    return l;
+  };
+
+  // Principal: alto y a 45° sobre el lado del conductor. Marca el volumen de la
+  // caja y el borde superior de la cabina.
+  const keyLight = makePanel(0xfff1d8, 26, 3.2, 2.0, [-2.6, 3.4, 5.4]);
+  // Relleno: opuesto, más suave y frío, para que la sombra no se cierre a negro.
+  const fillLight = makePanel(0xbcd0ff, 9, 3.6, 2.4, [2.9, 2.0, 5.0]);
+  // Contra: bajo y detrás, separa el paragolpes y los neumáticos del asfalto.
+  const rimLight = makePanel(0xffd9a8, 14, 2.6, 1.2, [0, 1.3, 6.6]);
+
+  // Ambiente local muy tenue: levanta los bajos y el hueco de la caja, donde no
+  // llega ningún panel.
+  const bedFill = new THREE.PointLight(0xffe8cc, 3.2, 7, 2);
+  bedFill.position.set(0, 1.5, 3.2);
+  rig.add(bedFill);
+
   // ───────────────────────── controles / cámara
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.maxPolarAngle = Math.PI * 0.495;
   controls.enabled = false;
+
+  // Asomarse arrastrando: orbita alrededor de la camioneta mientras se mantiene
+  // pulsado y vuelve al encuadre al soltar. En la cámara libre se desactiva,
+  // porque ahí manda OrbitControls.
+  const peek = createCameraPeek({
+    camera,
+    domElement: renderer.domElement,
+    pivot: () => truckPeekTarget,
+    minHeight: 0.6,
+  });
 
   camera.fov = 42;
   camera.near = 0.2;
@@ -712,6 +768,8 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   const wheelCirc = 2 * Math.PI * wheelRadius;
 
   const truckPos = new THREE.Vector3();
+  // pivote del peek: centro aproximado de la camioneta, no sus ruedas
+  const truckPeekTarget = new THREE.Vector3();
   const lookAt = new THREE.Vector3();
   const desired = new THREE.Vector3();
 
@@ -744,6 +802,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
     cam = CAMS[(CAMS.indexOf(cam) + 1) % CAMS.length]!;
     camBtn.textContent = `Cámara: ${CAM_LABEL[cam]}`;
     controls.enabled = cam === 'libre';
+    peek.setEnabled(cam !== 'libre');
     if (cam === 'libre') controls.target.copy(truckPos);
   };
   const onKey = (e: KeyboardEvent) => {
@@ -758,6 +817,11 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   return {
     id: 'desert',
     update(dt) {
+      // Devuelve la cámara a su pose sin desviar antes de recalcularla: las
+      // cámaras de este modo interpolan desde su posición actual, así que leer la
+      // pose ya desviada por el peek realimentaría el desvío.
+      peek.begin();
+
       if (playing) {
         t += dt;
         if (t >= DURATION) t -= DURATION; // bucle exacto de 15 s
@@ -825,14 +889,25 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
           break;
       }
 
+      // El peek va al final, cuando la cámara ya está colocada: toma esa pose
+      // como base y le superpone el desvío del arrastre.
+      truckPeekTarget.copy(truckPos).setY(truckPos.y + 1.1);
+      peek.apply(dt);
+
       seek.value = String(t / DURATION);
       timeEl.textContent = `${t.toFixed(1)} / ${DURATION} s`;
     },
     dispose() {
       window.removeEventListener('keydown', onKey);
+      peek.dispose();
       controls.dispose();
       scene.remove(sky, stars, moon, halo, ground, road, dashes, edgeLines, cacti, rocks, truck);
       scene.remove(moonLight, moonLight.target, bounce, dusk, dusk.target);
+      for (const l of [keyLight, fillLight, rimLight, bedFill]) {
+        l.removeFromParent();
+        l.dispose();
+      }
+      rig.removeFromParent();
       hlL.dispose?.();
       hlR.dispose?.();
       truck.traverse((o) => {
