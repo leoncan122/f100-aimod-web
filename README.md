@@ -80,7 +80,8 @@ volver al encuadre.
 
 ## Tests
 
-`scripts/smoke.mjs` levanta Chrome real (ANGLE/SwiftShader), carga ambos modos,
+`scripts/smoke.mjs` levanta Chrome real (ANGLE/SwiftShader), recorre los tres
+modos cambiando el hash,
 espera a que el overlay de carga desaparezca y comprueba:
 
 - cero errores de consola y cero peticiones fallidas;
@@ -91,8 +92,31 @@ espera a que el overlay de carga desaparezca y comprueba:
 
 Capturas en `test-results/`.
 
-Resultado actual: ambos modos OK, ~2,97 M tris / 495 draw calls en cinemática y
-~1,78 M tris / 383 draw calls en modelo (bajo SwiftShader, sin GPU).
+Resultado actual: los tres modos OK, ~2,97 M tris / 495 draw calls en cinemática,
+~1,78 M tris / 383 draw calls en modelo y 406 en desierto (bajo SwiftShader, sin
+GPU).
+
+### Scripts de verificación
+
+`scripts/lib/viewer.mjs` concentra lo común: arranque de Chrome con GL por
+software, `openMode()` para abrir una vista, `waitFrames()` y `seekTo()`.
+
+`openMode()` navega **directo al hash** (`#desert`) en vez de cargar la vista por
+defecto y pulsar la pestaña. Ahorra una carga de escena completa — 51 s → 34 s en
+`smoke-one desert` — y elimina el clic, que es la parte frágil: si se lanza antes
+de que la app monte sus handlers se pierde en silencio y el script acaba midiendo
+la vista equivocada mientras informa de éxito.
+
+Todos aceptan la URL base como primer argumento y por defecto usan
+`http://localhost:5180/`:
+
+```bash
+node scripts/smoke-one.mjs desert          # un modo (evita timeouts)
+node scripts/test-grounding.mjs            # regresión de apoyo de las ruedas
+node scripts/test-peek.mjs '' desierto     # peek de cámara; 3er arg filtra casos
+node scripts/test-hash-routing.mjs         # enlaces compartibles
+node scripts/measure-idle-cost.mjs         # consumo con la pestaña oculta
+```
 
 ## Notas de implementación
 

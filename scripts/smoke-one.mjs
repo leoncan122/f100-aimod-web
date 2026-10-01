@@ -2,26 +2,15 @@
  * Smoke test de UN solo modo (evita timeouts: SwiftShader tarda ~25 s por modo).
  * Uso: node scripts/smoke-one.mjs <modo> [baseUrl]
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch, openMode } from './lib/viewer.mjs';
 import { mkdirSync } from 'node:fs';
 
 const MODE = process.argv[2] ?? 'desert';
-const BASE = process.argv[3] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[3] ?? DEFAULT_BASE;
 const OUT = 'test-results';
 mkdirSync(OUT, { recursive: true });
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000, // SwiftShader bloquea el hilo en escenas con fill-rate alto
-  args: [
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
-    '--enable-unsafe-swiftshader',
-    '--no-sandbox',
-    '--window-size=1100,620',
-  ],
-});
+const browser = await launch(['--window-size=1100,620']);
 
 try {
   const page = await browser.newPage();
@@ -43,31 +32,9 @@ try {
     failed.push(`${r.url()} ${err}`);
   });
 
-  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-
-  // Esperar SIEMPRE a que el modo inicial (cinematic) termine de montar:
-  // hasta entonces los handlers de las pestañas no están activos y el clic
-  // se pierde silenciosamente.
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden'),
-    { timeout: 240_000, polling: 300 },
-  );
-
-  const start = Date.now();
-  if (MODE !== 'cinematic') {
-    await page.click(`.tab[data-mode="${MODE}"]`);
-    // y confirmar que la pestaña quedó activa y el modo recargó
-    await page.waitForFunction(
-      (m) => document.querySelector(`.tab[data-mode="${m}"]`)?.classList.contains('on'),
-      { timeout: 240_000, polling: 300 },
-      MODE,
-    );
-  }
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden'),
-    { timeout: 240_000, polling: 300 },
-  );
-  const loadMs = Date.now() - start;
+  // Directo a la vista por hash: evita cargar la vista por defecto y pulsar la
+  // pestaña, asi que loadMs mide solo la escena pedida.
+  const loadMs = await openMode(page, BASE, MODE);
 
   await new Promise((r) => setTimeout(r, 7000));
 

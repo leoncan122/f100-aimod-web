@@ -5,8 +5,9 @@
  * hash, escritura del hash al pulsar una pestaña, y el boton atras/adelante.
  */
 import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE } from './lib/viewer.mjs';
 
-const BASE = process.argv[2] ?? 'http://localhost:5184/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 
 const browser = await puppeteer.launch({
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',

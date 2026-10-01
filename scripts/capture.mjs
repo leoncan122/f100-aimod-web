@@ -1,22 +1,12 @@
 /** Capturas de la cinemática en varios instantes + la camioneta desde varios ángulos. */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch } from './lib/viewer.mjs';
 import { mkdirSync } from 'node:fs';
 
-const BASE = process.argv[2] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 const OUT = 'test-results/frames';
 mkdirSync(OUT, { recursive: true });
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  args: [
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
-    '--enable-unsafe-swiftshader',
-    '--no-sandbox',
-    '--window-size=1600,900',
-  ],
-});
+const browser = await launch(['--window-size=1600,900']);
 
 try {
   const page = await browser.newPage();

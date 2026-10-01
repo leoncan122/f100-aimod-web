@@ -10,10 +10,10 @@
  * avanza a pocos fps y una espera por reloj no garantiza que el bucle de render
  * haya corrido lo suficiente para que converja el suavizado.
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch, openMode, waitFrames } from './lib/viewer.mjs';
 import { mkdirSync } from 'node:fs';
 
-const BASE = process.argv[2] ?? 'http://localhost:5182/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 // Filtro opcional por etiqueta: permite correr un solo caso (swiftshader es lento).
 const ONLY = process.argv[3] ?? null;
 const OUT = 'test-results/peek';
@@ -26,36 +26,13 @@ const CASES = [
   { mode: 'cinematic', camClicks: 1, label: 'cinematica-trasera', seek: 20, total: 71 },
 ];
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000,
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-});
+const browser = await launch();
 
 const camPose = (page) =>
   page.evaluate(() => {
     const c = window.__camera;
     return c ? { pos: c.position.toArray() } : null;
   });
-
-const waitFrames = (page, n) =>
-  page.evaluate(
-    (k) =>
-      new Promise((res) => {
-        let i = 0;
-        const bail = setTimeout(() => res(i), 15_000);
-        const tick = () => {
-          if (++i >= k) {
-            clearTimeout(bail);
-            return res(i);
-          }
-          requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      }),
-    n,
-  );
 
 const dist = (a, b) => Math.hypot(...a.pos.map((v, i) => v - b.pos[i]));
 let failures = 0;
@@ -66,20 +43,8 @@ try {
     await page.setViewport({ width: 1280, height: 720 });
     page.on('pageerror', (e) => console.log('[PAGEERROR]', e.message.slice(0, 300)));
 
-    await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    await page.waitForFunction(
-      () => document.getElementById('loading')?.classList.contains('hidden'),
-      { timeout: 240_000, polling: 300 },
-    );
-    if (c.mode !== 'cinematic') {
-      await page.click(`.tab[data-mode="${c.mode}"]`);
-      await page.waitForFunction(
-        (m) => document.getElementById('loading')?.classList.contains('hidden')
-            && document.querySelector(`.tab[data-mode="${m}"]`)?.classList.contains('on'),
-        { timeout: 240_000, polling: 300 },
-        c.mode,
-      );
-    }
+    // Directo a la vista por hash, sin pasar por la vista por defecto.
+    await openMode(page, BASE, c.mode);
     await new Promise((r) => setTimeout(r, 2500));
     await page.click('#play'); // pausa
     for (let i = 0; i < c.camClicks; i++) await page.click('#cam');

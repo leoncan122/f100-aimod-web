@@ -1,14 +1,10 @@
 /** Lista los nodos raíz de un .glb y el tamaño de su bounding box. */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch } from './lib/viewer.mjs';
 
-const BASE = process.argv[2] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 const FILE = process.argv[3] ?? 'f100.glb';
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-});
+const browser = await launch();
 
 try {
   const page = await browser.newPage();

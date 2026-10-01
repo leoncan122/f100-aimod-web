@@ -8,18 +8,13 @@
  *
  * Uso: node scripts/test-grounding.mjs [baseUrl]   (requiere dev server)
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch, openMode } from './lib/viewer.mjs';
 
-const BASE = process.argv[2] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 const MAX_GAP = 0.005; // 5 mm
 const SAMPLES = [0, 2, 4, 6, 8, 10, 12, 14.5];
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000,
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-});
+const browser = await launch();
 
 let failed = false;
 try {
@@ -30,17 +25,9 @@ try {
     failed = true;
   });
 
-  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden'),
-    { timeout: 240_000, polling: 300 },
-  );
-  await page.click('.tab[data-mode="desert"]');
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden')
-       && document.querySelector('.tab[data-mode="desert"]')?.classList.contains('on'),
-    { timeout: 240_000, polling: 300 },
-  );
+  // Directo a la vista por hash: evita cargar la vista por defecto y pulsar la
+  // pestaña (una carga de escena menos, ~12 s bajo SwiftShader).
+  await openMode(page, BASE, 'desert');
   await new Promise((r) => setTimeout(r, 2500));
   await page.click('#play'); // pausar
 
@@ -60,10 +47,20 @@ try {
       if (!truck) return null;
       scene.updateMatrixWorld(true);
 
+      // El asfalto se identifica por su GEOMETRIA, no por su color: el color del
+      // material cambia cada vez que se retoca el look (al texturizarlo paso a
+      // blanco, porque el tono lo aporta el mapa), y un test atado al hex se
+      // rompe en silencio y deja de medir.
+      // Criterio: el plano horizontal mas angosto en X (el suelo es ~1200 m de
+      // ancho, la carretera ~8.4 m).
       let roadY = null;
+      let narrowest = Infinity;
       scene.traverse((o) => {
-        if (o.isMesh && o.geometry?.type === 'PlaneGeometry' && o.material?.color) {
-          if (o.material.color.getHexString() === '101018') roadY = o.position.y;
+        if (!o.isMesh || o.geometry?.type !== 'PlaneGeometry') return;
+        const w = o.geometry.parameters?.width ?? Infinity;
+        if (w < narrowest) {
+          narrowest = w;
+          roadY = o.position.y;
         }
       });
 
@@ -105,8 +102,15 @@ try {
     console.log(`t=${String(t).padStart(4)}s  hueco=${mm.toFixed(2).padStart(7)} mm  ${ok ? 'OK' : 'FALLO'}`);
   }
 
-  const worst = rows.reduce((a, b) => (Math.abs(b.mm) > Math.abs(a.mm) ? b : a), rows[0]);
-  console.log(`\npeor caso: ${worst.mm} mm (límite ±${MAX_GAP * 1000} mm)`);
+  // Sin muestras no hay nada que comparar: avisar en vez de petar leyendo .mm de
+  // undefined, que oculta la causa real (no se pudo localizar la escena).
+  if (rows.length === 0) {
+    console.log('\nninguna muestra medible: no se localizo el asfalto o el vehiculo');
+    failed = true;
+  } else {
+    const worst = rows.reduce((a, b) => (Math.abs(b.mm) > Math.abs(a.mm) ? b : a), rows[0]);
+    console.log(`\npeor caso: ${worst.mm} mm (límite ±${MAX_GAP * 1000} mm)`);
+  }
   console.log(failed ? 'RESULTADO: FALLO' : 'RESULTADO: OK');
 } finally {
   await browser.close();

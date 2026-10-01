@@ -1,8 +1,8 @@
 /** Capturas del modo Cinemática: las tres cámaras, en escritorio y móvil. */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch, openMode } from './lib/viewer.mjs';
 import { mkdirSync } from 'node:fs';
 
-const BASE = process.argv[2] ?? 'http://localhost:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 const OUT = 'test-results/cinematic';
 mkdirSync(OUT, { recursive: true });
 
@@ -11,12 +11,7 @@ const VIEWPORTS = [
   { name: 'mobile', width: 390, height: 844, dsf: 2 },
 ];
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000,
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-});
+const browser = await launch();
 
 try {
   for (const vp of VIEWPORTS) {
@@ -29,11 +24,8 @@ try {
     });
     page.on('pageerror', (e) => console.log('[PAGEERROR]', e.message.slice(0, 300)));
 
-    await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    await page.waitForFunction(
-      () => document.getElementById('loading')?.classList.contains('hidden'),
-      { timeout: 240_000, polling: 300 },
-    );
+    // Hash explicito: no depende de cual sea la vista por defecto.
+    await openMode(page, BASE, 'cinematic');
     await new Promise((r) => setTimeout(r, 4000));
     await page.click('#play'); // pausa
 

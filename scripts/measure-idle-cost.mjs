@@ -8,24 +8,13 @@
  *  - heap de JS en uso (requiere --enable-precise-memory-info)
  *  - recursos vivos del renderer de three.js (geometrias y texturas)
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch, openMode } from './lib/viewer.mjs';
 
-const BASE = process.argv[2] ?? 'http://localhost:5183/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 const MODE = process.argv[3] ?? 'desert';
 const WINDOW_S = 20; // duracion de cada ventana de medicion
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000,
-  args: [
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
-    '--enable-unsafe-swiftshader',
-    '--no-sandbox',
-    '--enable-precise-memory-info', // sin esto performance.memory viene redondeado
-  ],
-});
+const browser = await launch(['--enable-precise-memory-info']);
 
 try {
   const page = await browser.newPage();
@@ -35,20 +24,8 @@ try {
   const cdp = await page.target().createCDPSession();
   await cdp.send('Performance.enable');
 
-  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden'),
-    { timeout: 240_000, polling: 300 },
-  );
-  if (MODE !== 'cinematic') {
-    await page.click(`.tab[data-mode="${MODE}"]`);
-    await page.waitForFunction(
-      (m) => document.getElementById('loading')?.classList.contains('hidden')
-          && document.querySelector(`.tab[data-mode="${m}"]`)?.classList.contains('on'),
-      { timeout: 240_000, polling: 300 },
-      MODE,
-    );
-  }
+  // Directo a la vista por hash: una carga de escena menos.
+  await openMode(page, BASE, MODE);
   await new Promise((r) => setTimeout(r, 5000)); // dejar que se estabilice
 
   // Contador de frames instalado en la pagina: es la prueba directa de si el

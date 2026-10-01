@@ -4,16 +4,11 @@
  *
  * Uso: node scripts/verify-models.mjs [baseUrl]
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch } from './lib/viewer.mjs';
 
-const BASE = process.argv[2] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000,
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-});
+const browser = await launch();
 
 let failed = false;
 try {

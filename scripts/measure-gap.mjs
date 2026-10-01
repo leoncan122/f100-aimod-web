@@ -2,33 +2,20 @@
  * Mide el hueco REAL entre los neumáticos y el asfalto en el modo Desierto,
  * dentro de la escena en ejecución (no recargando el glb por separado).
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch, openMode } from './lib/viewer.mjs';
 
-const BASE = process.argv[2] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 
-const browser = await puppeteer.launch({
-  executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  headless: 'new',
-  protocolTimeout: 600_000,
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-});
+const browser = await launch();
 
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 900, height: 520 });
   page.on('pageerror', (e) => console.log('[PAGEERROR]', e.message.slice(0, 300)));
 
-  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden'),
-    { timeout: 240_000, polling: 300 },
-  );
-  await page.click('.tab[data-mode="desert"]');
-  await page.waitForFunction(
-    () => document.getElementById('loading')?.classList.contains('hidden')
-       && document.querySelector('.tab[data-mode="desert"]')?.classList.contains('on'),
-    { timeout: 240_000, polling: 300 },
-  );
+  // Directo a la vista por hash: evita cargar la vista por defecto y pulsar la
+  // pestaña (una carga de escena menos, ~12 s bajo SwiftShader).
+  await openMode(page, BASE, 'desert');
   await new Promise((r) => setTimeout(r, 4000));
   await page.click('#play'); // pausar para medir estable
 

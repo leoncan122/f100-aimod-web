@@ -5,26 +5,16 @@
  *
  * Uso:  node scripts/smoke.mjs [baseUrl]
  */
-import puppeteer from 'puppeteer-core';
+import { DEFAULT_BASE, launch } from './lib/viewer.mjs';
 import { mkdirSync } from 'node:fs';
 
-const BASE = process.argv[2] ?? 'http://127.0.0.1:5180/';
+const BASE = process.argv[2] ?? DEFAULT_BASE;
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const OUT = 'test-results';
 
 mkdirSync(OUT, { recursive: true });
 
-const browser = await puppeteer.launch({
-  executablePath: CHROME,
-  headless: 'new',
-  args: [
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
-    '--enable-unsafe-swiftshader',
-    '--window-size=1280,800',
-    '--no-sandbox',
-  ],
-});
+const browser = await launch(['--window-size=1280,800']);
 
 const results = [];
 
@@ -41,22 +31,45 @@ try {
   page.on('requestfailed', (r) => failed.push(`${r.url()} ${r.failure()?.errorText}`));
 
   const t0 = Date.now();
-  await page.goto(BASE, { waitUntil: 'networkidle2', timeout: 120_000 });
+  // Arrancar ya en la primera vista por hash y esperar a que monte: hasta
+  // entonces no hay handler de hashchange al que avisar. Se cronometra aqui para
+  // que el primer modo reporte su carga real y no un loadMs de milisegundos.
+  const firstStart = Date.now();
+  await page.goto(new URL('#cinematic', BASE).href, {
+    waitUntil: 'networkidle2',
+    timeout: 120_000,
+  });
+  await page.waitForFunction(
+    () => document.getElementById('loading')?.classList.contains('hidden'),
+    { timeout: 180_000, polling: 250 },
+  );
+  let firstLoadMs = Date.now() - firstStart;
 
   for (const mode of ['cinematic', 'orbit', 'desert']) {
     const before = errors.length;
     const start = Date.now();
 
-    if (mode !== 'cinematic') {
-      await page.click(`.tab[data-mode="${mode}"]`);
-    }
+    // Cambio de vista por hash en lugar de pulsar la pestaña: no depende de que
+    // los handlers ya esten montados (un clic prematuro se pierde en silencio).
+    // Se reutiliza la misma page a proposito, para acumular los errores de
+    // consola de los tres modos.
+    await page.evaluate((m) => {
+      if (location.hash.replace(/^#/, '') !== m) location.hash = m;
+    }, mode);
+    await page.waitForFunction(
+      (m) => document.querySelector(`.tab[data-mode="${m}"]`)?.classList.contains('on'),
+      { timeout: 180_000, polling: 250 },
+      mode,
+    );
 
     // el overlay de carga se oculta cuando el modo terminó de montar
     await page.waitForFunction(
       () => document.getElementById('loading')?.classList.contains('hidden'),
       { timeout: 180_000, polling: 250 },
     );
-    const loadMs = Date.now() - start;
+    // El primer modo ya venia montado del goto inicial: usar ese tiempo.
+    const loadMs = firstLoadMs ?? Date.now() - start;
+    firstLoadMs = null;
 
     // dejar correr la animación para medir fps estable
     await new Promise((r) => setTimeout(r, 6000));
