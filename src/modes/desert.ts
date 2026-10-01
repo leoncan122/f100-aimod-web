@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { loadGLTF, MODELS } from '../loaders';
 import { extractVehicle } from '../vehicle';
 import { createCameraPeek } from '../camera-peek';
@@ -350,7 +349,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
 
   // Rebote suave: cielo frío arriba, tierra roja abajo. Intensidad contenida
   // para no lavar el asfalto — el protagonismo es de la luna.
-  const bounce = new THREE.HemisphereLight(0x3a4a86, COL_SAND_DARK, 0.6);
+  const bounce = new THREE.HemisphereLight(0x3a4a86, COL_SAND_DARK, 0.25);
   scene.add(bounce);
 
   // último rescoldo del ocaso, opuesto a la luna
@@ -687,49 +686,21 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
   tails.instanceMatrix.needsUpdate = true;
   truck.add(tails);
 
-  // ────────── iluminación de la zaga (encuadre por defecto)
-  // La cámara de persecución mira la trasera de la camioneta, que es justo la
-  // cara opuesta a la luna: quedaba casi en silueta. Se monta un esquema de tres
-  // puntos solidario al vehículo (se mueve con él, así que el encuadre es
-  // idéntico en todo el recorrido), con luces de área rectangulares — el
-  // equivalente a paneles de plató: caída suave y reflejos alargados en la
-  // chapa, mucho más creíble en una superficie metálica que un foco puntual.
+  // ───────────────────────── iluminación ambiente de la camioneta
+  // La cámara de persecución mira la trasera del vehículo, que es la cara
+  // opuesta a la luna: sin esto queda casi en silueta.
   //
-  // RectAreaLight no proyecta sombras ni necesita mapa, así que el coste es
-  // despreciable; requiere el LUT de uniforms, que se inicializa una vez.
-  RectAreaLightUniformsLib.init();
-
-  const rig = new THREE.Group();
-  truck.add(rig);
-
-  /** Panel de área apuntado al centro de la caja de carga. */
-  const makePanel = (
-    color: number,
-    intensity: number,
-    w: number,
-    h: number,
-    pos: [number, number, number],
-  ) => {
-    const l = new THREE.RectAreaLight(color, intensity, w, h);
-    l.position.set(...pos);
-    l.lookAt(0, 1.1, 2.1);
-    rig.add(l);
-    return l;
-  };
-
-  // Principal: alto y a 45° sobre el lado del conductor. Marca el volumen de la
-  // caja y el borde superior de la cabina.
-  const keyLight = makePanel(0xfff1d8, 26, 3.2, 2.0, [-2.6, 3.4, 5.4]);
-  // Relleno: opuesto, más suave y frío, para que la sombra no se cierre a negro.
-  const fillLight = makePanel(0xbcd0ff, 9, 3.6, 2.4, [2.9, 2.0, 5.0]);
-  // Contra: bajo y detrás, separa el paragolpes y los neumáticos del asfalto.
-  const rimLight = makePanel(0xffd9a8, 14, 2.6, 1.2, [0, 1.3, 6.6]);
-
-  // Ambiente local muy tenue: levanta los bajos y el hueco de la caja, donde no
-  // llega ningún panel.
-  const bedFill = new THREE.PointLight(0xffe8cc, 3.2, 7, 2);
-  bedFill.position.set(0, 1.5, 3.2);
-  rig.add(bedFill);
+  // Luz ambiente de la misma tonalidad cálida que los faros: baña el modelo por
+  // igual desde todas las direcciones, así que levanta la zaga y los bajos sin
+  // brillos ni una dirección de luz que compita con la luna.
+  //
+  // OJO: no se puede confinar con `layers`. three.js descarta las luces
+  // comparándolas con las capas de la CÁMARA, no con las de cada objeto, así que
+  // una luz fuera de la capa de la cámara no ilumina nada en absoluto. Al ser
+  // global hay que compensar: el rebote hemisférico baja para que la arena y las
+  // sombras del desierto conserven el contraste nocturno.
+  const truckAmbient = new THREE.AmbientLight(0xffe3b4, 0.8);
+  scene.add(truckAmbient);
 
   // ───────────────────────── controles / cámara
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -903,11 +874,7 @@ export async function createDesertMode(deps: DesertDeps): Promise<ViewerMode> {
       controls.dispose();
       scene.remove(sky, stars, moon, halo, ground, road, dashes, edgeLines, cacti, rocks, truck);
       scene.remove(moonLight, moonLight.target, bounce, dusk, dusk.target);
-      for (const l of [keyLight, fillLight, rimLight, bedFill]) {
-        l.removeFromParent();
-        l.dispose();
-      }
-      rig.removeFromParent();
+      scene.remove(truckAmbient);
       hlL.dispose?.();
       hlR.dispose?.();
       truck.traverse((o) => {

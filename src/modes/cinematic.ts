@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { loadGLTF, loadJSON, disposeObject, MODELS } from '../loaders';
+import { createCameraPeek } from '../camera-peek';
 import type { CameraTrack, ViewerMode } from '../types';
 
 export interface CinematicDeps {
@@ -166,6 +167,16 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   controls.enabled = false;
   controls.enableDamping = true;
 
+  // Asomarse arrastrando: válido tanto sobre el track horneado como sobre la
+  // cámara trasera. En la libre se desactiva, porque ahí manda OrbitControls.
+  const peekTarget = new THREE.Vector3();
+  const peek = createCameraPeek({
+    camera,
+    domElement: renderer.domElement,
+    pivot: () => (truck ? peekTarget : null),
+    minHeight: 0.8,
+  });
+
   const qa = new THREE.Quaternion();
   const qb = new THREE.Quaternion();
   const pa = new THREE.Vector3();
@@ -224,6 +235,7 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
     camBtn.textContent = `Cámara: ${CAM_LABEL[cam]}`;
     camBtn.classList.toggle('on', cam !== 'cinematica');
     controls.enabled = cam === 'libre';
+    peek.setEnabled(cam !== 'libre');
     if (cam === 'libre') {
       const p = new THREE.Vector3();
       (truck ?? gltf.scene).getWorldPosition(p);
@@ -292,6 +304,11 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   return {
     id: 'cinematic',
     update(dt) {
+      // Restaura la pose sin desviar antes de recalcular la cámara: la trasera
+      // interpola desde su posición actual y leer la pose ya desviada por el peek
+      // realimentaría el desvío.
+      peek.begin();
+
       if (playing) {
         t += dt;
         if (t > duration) t = 0;
@@ -306,11 +323,19 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         dir.position.copy(tp).addScaledVector(sun, 60);
         dir.target.position.copy(tp);
       }
+      // El peek va al final, cuando la cámara ya tiene su pose definitiva.
+      if (truck) {
+        (truck as THREE.Object3D).getWorldPosition(peekTarget);
+        peekTarget.y += 1.1;
+      }
+      peek.apply(dt);
+
       seek.value = String(t / duration);
       timeEl.textContent = `${t.toFixed(1)} / ${duration.toFixed(0)} s`;
     },
     dispose() {
       window.removeEventListener('keydown', onKey);
+      peek.dispose();
       controls.dispose();
       mixer.stopAllAction();
       scene.remove(gltf.scene, sky, hemi, dir, dir.target, fill);
