@@ -51,11 +51,32 @@ npm run build    # tsc + vite build -> dist/
 npm run smoke    # test de humo en Chrome headless (requiere dev server activo)
 ```
 
+## Enlaces compartibles
+
+Cada vista tiene su propia URL mediante el hash, así que se puede compartir un
+enlace directo a una de ellas:
+
+- `#cinematic` — Cinemática (por defecto)
+- `#orbit` — Modelo
+- `#desert` — Desierto
+
+Pulsar una pestaña actualiza la URL con `pushState`, así que atrás/adelante del
+navegador recorren las vistas visitadas. Un hash desconocido abre la vista por
+defecto y normaliza la URL, para no compartir un enlace que no corresponde a lo
+que se ve.
+
+Se usa el hash y no una ruta real (`/desert`) porque el sitio se publica en
+GitHub Pages: el hash no llega al servidor, así que un enlace directo funciona
+sin configuración extra, mientras que una ruta devolvería 404.
+
 ## Controles
 
-**Cinemática**: `Espacio` play/pausa · barra de scrub · botón *Cámara libre* para
-orbitar alrededor del vehículo.
+**Cinemática**: `Espacio` play/pausa · barra de scrub · `C` cicla cámara
+(cinemática → trasera → libre) · arrastrar el lienzo para asomarse, soltar para
+volver al encuadre.
 **Modelo**: arrastrar orbita · rueda zoom · `R` auto-rotar · `F` reencuadrar.
+**Desierto**: `Espacio` play/pausa · barra de scrub · `C` cicla cámara
+(persecución → lateral → capó → libre) · arrastrar el lienzo para asomarse.
 
 ## Tests
 
