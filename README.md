@@ -116,6 +116,8 @@ node scripts/test-grounding.mjs            # regresión de apoyo de las ruedas
 node scripts/test-peek.mjs '' desierto     # peek de cámara; 3er arg filtra casos
 node scripts/test-hash-routing.mjs         # enlaces compartibles
 node scripts/measure-idle-cost.mjs         # consumo con la pestaña oculta
+node scripts/test-cinematic-framing.mjs    # encuadre del track por aspecto
+node scripts/compare-fit-weight.mjs        # comparativa visual de FIT_WEIGHT
 ```
 
 ## Notas de implementación
@@ -133,6 +135,14 @@ node scripts/measure-idle-cost.mjs         # consumo con la pestaña oculta
   y `Rueda_*`. Los del nodo raíz mueven el vehículo por el paisaje.
 - **Sombras**: la direccional de cinemática reencuadra su cámara de sombras sobre
   el vehículo cada frame; sin eso, el paisaje de 843 m degrada la resolución.
+- **Encuadre del track según el aspecto**: `camara.json` guarda el FOV
+  *horizontal* por frame, animado en 16:9. Reproducirlo tal cual preserva el campo
+  horizontal a costa del vertical, y en un móvil en vertical (aspect 0,46) el FOV
+  vertical salta de 19° a 66°: un gran angular que aleja el vehículo. El extremo
+  opuesto (preservar el vertical) cerraría el horizontal a 9° y eliminaría el
+  paisaje. `fovForAspect()` mezcla ambos ajustes con una media geométrica
+  (`FIT_WEIGHT = 0.4`), y solo actúa en encuadres más estrechos que el de autoría
+  — en apaisado el track se respeta exactamente. Resultado en móvil: 61,9° → 37,5°.
 
 ## Modo Desierto — decisiones de diseño
 

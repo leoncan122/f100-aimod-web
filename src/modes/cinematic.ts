@@ -182,6 +182,47 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   const pa = new THREE.Vector3();
   const pb = new THREE.Vector3();
 
+  // ───────────────────────── encuadre del track segun la relacion de aspecto
+  //
+  // El track trae el FOV HORIZONTAL por frame, tal como se animo en Blender con
+  // un encuadre apaisado (16:9). Reproducirlo tal cual preserva el campo
+  // horizontal a costa del vertical, y en un movil en vertical (aspect 0.46) eso
+  // dispara el FOV vertical de 19° a 66°: un gran angular que mete muchisimo
+  // cielo y suelo y deja la camioneta diminuta. El problema NO es la distancia de
+  // la camara, es el ajuste del FOV.
+  //
+  // El extremo opuesto (preservar el vertical de autoria) cerraria el horizontal
+  // a 9°: la camioneta llenaria el cuadro y desapareceria el paisaje.
+  //
+  // Solucion: mezcla geometrica entre ambos ajustes. Con FIT_WEIGHT = 0 se
+  // conserva el horizontal (comportamiento anterior) y con 1 el vertical; los
+  // valores intermedios acercan el encuadre dejando paisaje alrededor. Se
+  // interpola en log porque el FOV se percibe de forma multiplicativa, asi que
+  // una media geometrica reparte el compromiso de forma uniforme.
+  //
+  // Solo se aplica en encuadres mas estrechos que el de autoria: en apaisado el
+  // track se respeta exactamente como se animo.
+  const AUTHORED_ASPECT = 16 / 9;
+  // 0.4 elegido comparando capturas en 390x844 (scripts/compare-fit-weight.mjs):
+  // acerca la camioneta lo suficiente para leer la caja y el perro, y todavia
+  // deja ver la montaña y algo de cielo. Con 0.55 ya se recorta el horizonte.
+  const FIT_WEIGHT = 0.4;
+
+  const fovForAspect = (hfov: number): number => {
+    const vKeepH = 2 * Math.atan(Math.tan(hfov / 2) / camera.aspect);
+    if (camera.aspect >= AUTHORED_ASPECT) return vKeepH;
+    const vKeepV = 2 * Math.atan(Math.tan(hfov / 2) / AUTHORED_ASPECT);
+    // Override solo en dev: permite comparar pesos en vivo desde un script sin
+    // recompilar. applyCam() recalcula el fov cada frame, asi que fijarlo desde
+    // fuera no sirve de nada: hay que cambiar el peso que usa este calculo.
+    const w =
+      import.meta.env.DEV && typeof (window as unknown as Record<string, unknown>).__fitWeight === 'number'
+        ? ((window as unknown as Record<string, number>).__fitWeight as number)
+        : FIT_WEIGHT;
+    // media geometrica entre conservar horizontal y conservar vertical
+    return Math.exp((1 - w) * Math.log(vKeepH) + w * Math.log(vKeepV));
+  };
+
   function applyCam(t: number) {
     const fr = Math.min(nf - 1.0001, Math.max(0, t * fps));
     const i = Math.floor(fr);
@@ -195,7 +236,7 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
     qb.set(b[3]!, b[4]!, b[5]!, b[6]!);
     camera.quaternion.slerpQuaternions(qa, qb, k);
     const hfov = a[7]! + (b[7]! - a[7]!) * k;
-    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(hfov / 2) / camera.aspect));
+    camera.fov = THREE.MathUtils.radToDeg(fovForAspect(hfov));
     camera.updateProjectionMatrix();
   }
 
