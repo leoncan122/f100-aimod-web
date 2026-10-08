@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { loadGLTF, loadJSON, disposeObject, MODELS } from '../loaders';
 import { createCameraPeek } from '../camera-peek';
+import { createCharacter } from '../character/character';
+import { createCharacterHud } from '../character/hud';
 import type { CameraTrack, ViewerMode } from '../types';
 
 export interface CinematicDeps {
@@ -76,9 +78,10 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   scene.add(hemi, dir, dir.target, fill);
 
   onProgress(0, 'Cargando escena…');
-  const [gltf, track] = await Promise.all([
+  const [gltf, track, charGltf] = await Promise.all([
     loadGLTF(MODELS.scene, (p) => onProgress(p, 'Cargando escena…')),
     loadJSON<CameraTrack>(MODELS.cameraTrack),
+    loadGLTF(MODELS.character),
   ]);
 
   // Los prototipos de árbol de Geometry Nodes se exportan también como mallas
@@ -166,6 +169,31 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enabled = false;
   controls.enableDamping = true;
+
+  // ────────── conductor: va al volante; al pausar se baja y se controla a pie
+  // La carrocería (`Cube`, bajo la suspensión) es el marco del asiento; el suelo
+  // para caminar sale del terreno, la carretera y la explanada del mirador.
+  // (truck se asigna dentro de un traverse, así que TS lo estrecha a null: se recupera el tipo real)
+  const vehicle = truck as THREE.Object3D | null;
+  const body = vehicle?.getObjectByName('Cube') ?? null;
+  const groundMeshes: THREE.Mesh[] = [];
+  gltf.scene.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && /^(Paisaje_Terreno|Ruta_Camino|Mirador_Explanada)/.test(o.name)) groundMeshes.push(o as THREE.Mesh);
+  });
+  mixer.setTime(0);
+  gltf.scene.updateMatrixWorld(true);
+  let charHud: ReturnType<typeof createCharacterHud> | null = null;
+  const driver = vehicle && body
+    ? createCharacter({
+        scene,
+        gltf: charGltf,
+        vehicle,
+        body,
+        groundMeshes,
+        onSeated: () => setPlaying(true),
+        onSay: (text, ms) => charHud?.say(text, ms),
+      })
+    : null;
 
   // Asomarse arrastrando: válido tanto sobre el track horneado como sobre la
   // cámara trasera. En la libre se desactiva, porque ahí manda OrbitControls.
@@ -264,10 +292,40 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   let playing = true;
   let t = 0;
 
-  playBtn.onclick = () => {
-    playing = !playing;
+  function setPlaying(v: boolean) {
+    playing = v;
     playBtn.textContent = playing ? '⏸ Pausa' : '▶ Play';
+    playBtn.disabled = false;
+  }
+  /** Volver a la camioneta: camina hasta la puerta, se sienta y la película sigue. */
+  const board = () => {
+    if (!driver || driver.state !== 'foot') return;
+    driver.enterVehicle();
+    playBtn.disabled = true;
+    playBtn.textContent = 'Subiendo…';
   };
+  playBtn.onclick = () => {
+    if (!driver) { setPlaying(!playing); return; }
+    if (playing) {
+      // pausar = el conductor se baja (la camioneta queda quieta donde está)
+      setPlaying(false);
+      driver.exitVehicle();
+    } else if (driver.state === 'foot') board();
+    else if (driver.state === 'drive') setPlaying(true);
+  };
+  if (driver) {
+    charHud = createCharacterHud({ host: hud.parentElement ?? document.body, canvas: renderer.domElement, character: driver, onBoard: board });
+  }
+  // Solo en dev: los scripts de test leen el estado del conductor y paran el tiempo sin que se baje.
+  if (import.meta.env.DEV) {
+    const w = window as unknown as Record<string, unknown>;
+    w.__driver = driver;
+    w.__cine = {
+      setTime: (v: number) => { t = v; },
+      hold: (v: boolean) => { playing = !v; },
+      setFree: () => { while (cam !== 'libre') camBtn.click(); },
+    };
+  }
   seek.oninput = () => {
     t = Number(seek.value) * duration;
   };
@@ -292,6 +350,8 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   };
 
   const onKey = (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement | null)?.closest?.('input, textarea')) return;
+    if (driver && driver.state !== 'drive') return; // a pie, Espacio salta (lo gestiona el HUD del personaje)
     if (e.code === 'Space') {
       e.preventDefault();
       playBtn.click();
@@ -342,6 +402,54 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
     }
   };
 
+  // ────────── cámara a pie: órbita libre que sigue al conductor
+  let footCam = false;
+  const followTarget = new THREE.Vector3();
+  const camFrom = new THREE.Vector3();
+  const camTo = new THREE.Vector3();
+  let camTween = 1;
+  function setFootCam(on: boolean) {
+    footCam = on;
+    if (on && driver) {
+      // encuadre de partida: fuera de la puerta, algo adelantado y por encima, mirándole
+      peek.setEnabled(false);
+      controls.enabled = true;
+      driver.chest(followTarget);
+      const out = new THREE.Vector3(-1, 0, 0).transformDirection((truck as THREE.Object3D).matrixWorld).setY(0).normalize();
+      const fwd = new THREE.Vector3(0, 0, -1).transformDirection((truck as THREE.Object3D).matrixWorld).setY(0).normalize();
+      camFrom.copy(camera.position);
+      camTo.copy(followTarget).addScaledVector(out, 3.6).addScaledVector(fwd, 2.2).setY(followTarget.y + 0.9);
+      camTween = 0;
+      controls.target.copy(followTarget);
+      controls.minDistance = 1;
+      controls.maxDistance = 14;
+      if (camera.fov !== 45) { camera.fov = 45; camera.updateProjectionMatrix(); }
+    } else {
+      controls.enabled = cam === 'libre';
+      controls.minDistance = 0;
+      controls.maxDistance = Infinity;
+      peek.setEnabled(cam !== 'libre');
+      if (cam === 'trasera') chaseInit = true;
+    }
+  }
+  function followDriver(dt: number) {
+    if (!driver) return;
+    const prev = followTarget.clone();
+    driver.chest(followTarget);
+    const d = followTarget.clone().sub(prev);
+    if (camTween < 1) {
+      camTween = Math.min(1, camTween + dt / 0.9);
+      const e = 1 - Math.pow(1 - camTween, 3);
+      camTo.add(d);
+      camera.position.lerpVectors(camFrom, camTo, e);
+      controls.target.copy(followTarget);
+    } else {
+      controls.target.add(d);
+      camera.position.add(d);
+    }
+    controls.update();
+  }
+
   return {
     id: 'cinematic',
     update(dt) {
@@ -355,11 +463,24 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         if (t > duration) t = 0;
       }
       mixer.setTime(t);
-      if (cam === 'libre') controls.update();
+      // el conductor necesita la carrocería de ESTE frame (el render actualiza matrices después)
+      if (truck) (truck as THREE.Object3D).updateWorldMatrix(true, true);
+      if (driver && charHud) driver.update(dt, charHud.input(camera));
+
+      const onFoot = !!driver && driver.state !== 'drive';
+      if (onFoot !== footCam) setFootCam(onFoot);
+      seek.disabled = onFoot;
+      camBtn.disabled = onFoot;
+      if (footCam && driver) followDriver(dt);
+      else if (cam === 'libre') controls.update();
       else if (cam === 'trasera') applyChase(dt);
       else applyCam(t);
 
-      if (truck) {
+      if (footCam && driver) {
+        driver.root.getWorldPosition(tp);
+        dir.position.copy(tp).addScaledVector(sun, 60);
+        dir.target.position.copy(tp);
+      } else if (truck) {
         (truck as THREE.Object3D).getWorldPosition(tp);
         dir.position.copy(tp).addScaledVector(sun, 60);
         dir.target.position.copy(tp);
@@ -370,12 +491,20 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         peekTarget.y += 1.1;
       }
       peek.apply(dt);
+      if (driver && driver.shake > 0) {
+        const k = 0.012 * driver.shake;
+        camera.position.x += (Math.random() - 0.5) * k;
+        camera.position.y += (Math.random() - 0.5) * k;
+      }
+      charHud?.update(camera);
 
       seek.value = String(t / duration);
       timeEl.textContent = `${t.toFixed(1)} / ${duration.toFixed(0)} s`;
     },
     dispose() {
       window.removeEventListener('keydown', onKey);
+      charHud?.dispose();
+      driver?.dispose();
       peek.dispose();
       controls.dispose();
       mixer.stopAllAction();

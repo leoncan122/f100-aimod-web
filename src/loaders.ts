@@ -18,6 +18,8 @@ export const MODELS = {
   scene: 'escena.glb',
   truck: 'f100-truck.glb',
   cameraTrack: 'camara.json',
+  /** Conductor de la cinemática (scripts/optimize-character.mjs). */
+  character: 'personaje.glb',
 } as const;
 
 export const asset = (file: string) => `${import.meta.env.BASE_URL}models/${file}`;
