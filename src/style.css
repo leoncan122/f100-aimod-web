@@ -233,3 +233,26 @@ body {
 @media (max-width: 560px) {
   #charPanel { top: auto; bottom: 120px; }
 }
+
+/* ---- Aitziber, la acompañante (Cinemática three.js) */
+#aitziPanel {
+  position: fixed;
+  top: 56px;
+  left: 16px;
+  width: min(300px, calc(100vw - 32px));
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  z-index: 2;
+}
+#aitziPanel .who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+#aitziPanel .who b { color: #e98aa0; }
+#aitziPanel .now { color: var(--muted); font-size: 12px; }
+#aitziPanel .acts { display: none; flex-wrap: wrap; gap: 6px; }
+#aitziPanel.foot .acts { display: flex; }
+#aitziPanel kbd { font: 11px ui-monospace, monospace; opacity: 0.6; margin-left: 2px; }
+@media (max-width: 560px) { #aitziPanel { top: auto; bottom: 120px; } }

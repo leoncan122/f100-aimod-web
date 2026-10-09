@@ -6,10 +6,10 @@ export interface CameraTrack {
   frames: number[][];
 }
 
-export type ModeId = 'cinematic' | 'orbit' | 'desert';
+export type ModeId = 'cinematic' | 'cinematic-three' | 'orbit' | 'desert';
 
 /** Modos validos en tiempo de ejecucion, para validar el hash de la URL. */
-export const MODE_IDS = ['cinematic', 'orbit', 'desert'] as const satisfies readonly ModeId[];
+export const MODE_IDS = ['cinematic', 'cinematic-three', 'orbit', 'desert'] as const satisfies readonly ModeId[];
 
 /** Modo que se abre si la URL no trae hash o trae uno desconocido. */
 export const DEFAULT_MODE: ModeId = 'cinematic';

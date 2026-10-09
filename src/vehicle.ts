@@ -22,7 +22,7 @@ export interface Vehicle {
  * No sirve un Box3 del nodo: engloba frenos y suspensión, que sobresalen por
  * detrás del neumático y dan un radio inflado (0.52 m en vez de 0.37 m).
  */
-function measureWheelRadius(node: THREE.Object3D): number {
+export function measureWheelRadius(node: THREE.Object3D): number {
   const inv = new THREE.Matrix4().copy(node.matrixWorld).invert();
   const p = new THREE.Vector3();
   let rMax = 0;

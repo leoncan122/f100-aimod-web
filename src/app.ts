@@ -10,6 +10,7 @@ export function createApp(root: HTMLElement) {
     <div id="viewport"></div>
     <div id="tabs">
       <button class="tab on" data-mode="cinematic">Cinemática</button>
+      <button class="tab" data-mode="cinematic-three">Cinemática three.js</button>
       <button class="tab" data-mode="orbit">Modelo</button>
       <button class="tab" data-mode="desert">Desierto</button>
     </div>
@@ -75,6 +76,7 @@ export function createApp(root: HTMLElement) {
       // cualquier id desconocido caia silenciosamente en el desierto.
       const factories: Record<ModeId, (d: typeof deps) => Promise<ViewerMode>> = {
         cinematic: createCinematicMode,
+        'cinematic-three': (d) => createCinematicMode(d, { landscape: 'three' }),
         orbit: createOrbitMode,
         desert: createDesertMode,
       };

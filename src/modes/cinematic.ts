@@ -2,9 +2,14 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { loadGLTF, loadJSON, disposeObject, MODELS } from '../loaders';
+import { measureWheelRadius } from '../vehicle';
+import { createProceduralLandscape } from '../landscape/procedural';
+import type { Landscape } from '../landscape/procedural';
 import { createCameraPeek } from '../camera-peek';
 import { createCharacter } from '../character/character';
 import { createCharacterHud } from '../character/hud';
+import { createCompanion } from '../character/companion';
+import type { Companion } from '../character/companion';
 import type { CameraTrack, ViewerMode } from '../types';
 
 export interface CinematicDeps {
@@ -15,14 +20,30 @@ export interface CinematicDeps {
   onProgress: (pct: number, label: string) => void;
 }
 
+export interface CinematicOptions {
+  /**
+   * blender: paisaje exportado en escena.glb.
+   * three: solo la camioneta y el perro del glb (escena-vehiculo.glb); el
+   * paisaje se genera con three.js alrededor de su recorrido. Todo lo demás
+   * (cámaras, luces, sombras, conductor) es idéntico, para poder comparar.
+   */
+  landscape: 'blender' | 'three';
+}
+
 /**
  * Escena completa con la animación horneada desde Blender y el track de cámara
  * (posición, rotación y FOV horizontal por frame) leído de camara.json.
  */
-export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMode> {
+export async function createCinematicMode(
+  deps: CinematicDeps,
+  opts: CinematicOptions = { landscape: 'blender' },
+): Promise<ViewerMode> {
   const { renderer, camera, scene, hud, onProgress } = deps;
+  const procedural = opts.landscape === 'three';
 
-  renderer.toneMappingExposure = 1.0;
+  // Con paisaje procedural (Lambert, sin IBL en el suelo) el sol quemaba los
+  // claros: exposición y sol algo más bajos, más relleno de cielo.
+  renderer.toneMappingExposure = procedural ? 0.74 : 1.0;
   // Neblina cálida de tarde: a contraluz el aire tira a dorado, no a gris azul.
   scene.fog = new THREE.Fog(0xdcb489, 130, 680);
   scene.background = null;
@@ -30,7 +51,9 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   // Cielo procedural: la iluminación de Cycles no se exporta en glTF, se recrea aquí.
   const sky = new Sky();
   sky.scale.setScalar(5000);
-  scene.add(sky);
+  // Con paisaje procedural el Sky solo alimenta el IBL (para que la chapa refleje
+  // igual); en pantalla se dibuja un domo con degradado, mucho más barato.
+  if (!procedural) scene.add(sky);
 
   // Golden hour de verano: el sol a ~7° sobre el horizonte (ángulo polar 83°).
   // A esa altura la luz atraviesa mucha más atmósfera, el azul se dispersa y
@@ -54,10 +77,10 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   scene.environment = envRT.texture;
 
   // Rebote: cielo todavía azulado en el cenit, suelo devolviendo tono cálido.
-  const hemi = new THREE.HemisphereLight(0xc6dbff, 0x5c5a32, 0.55);
+  const hemi = new THREE.HemisphereLight(0xc6dbff, 0x5c5a32, procedural ? 0.65 : 0.55);
   // Sol rasante y ámbar: la clave del look golden hour. Sin pasarse de
   // saturación, o el verde del paisaje desaparece bajo el naranja.
-  const dir = new THREE.DirectionalLight(0xffc27a, 3.1);
+  const dir = new THREE.DirectionalLight(0xffc27a, procedural ? 1.8 : 3.1);
   dir.castShadow = true;
   dir.shadow.mapSize.set(2048, 2048);
   Object.assign(dir.shadow.camera, {
@@ -78,10 +101,12 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   scene.add(hemi, dir, dir.target, fill);
 
   onProgress(0, 'Cargando escena…');
-  const [gltf, track, charGltf] = await Promise.all([
-    loadGLTF(MODELS.scene, (p) => onProgress(p, 'Cargando escena…')),
+  const [gltf, track, charGltf, aitziGltf] = await Promise.all([
+    loadGLTF(procedural ? MODELS.vehicleScene : MODELS.scene, (p) => onProgress(p, 'Cargando escena…')),
     loadJSON<CameraTrack>(MODELS.cameraTrack),
     loadGLTF(MODELS.character),
+    // la acompañante solo viaja en la pestaña three.js
+    procedural ? loadGLTF(MODELS.companion) : Promise.resolve(null),
   ]);
 
   // Los prototipos de árbol de Geometry Nodes se exportan también como mallas
@@ -186,12 +211,63 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   // (truck se asigna dentro de un traverse, así que TS lo estrecha a null: se recupera el tipo real)
   const vehicle = truck as THREE.Object3D | null;
   const body = vehicle?.getObjectByName('Cube') ?? null;
-  const groundMeshes: THREE.Mesh[] = [];
-  gltf.scene.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh && /^(Paisaje_Terreno|Ruta_Camino|Mirador_Explanada)/.test(o.name)) groundMeshes.push(o as THREE.Mesh);
-  });
   mixer.setTime(0);
   gltf.scene.updateMatrixWorld(true);
+
+  // ────────── paisaje procedural (pestaña "Cinemática three.js")
+  let land: Landscape | null = null;
+  if (procedural && vehicle) {
+    onProgress(1, 'Generando paisaje…');
+    // superficie de rodadura respecto al origen del vehículo: eje de cada rueda menos su radio
+    const vp = vehicle.getWorldPosition(new THREE.Vector3());
+    let contact = Infinity;
+    vehicle.traverse((o) => {
+      if (!/^ROT_Rueda_/.test(o.name)) return;
+      contact = Math.min(contact, o.getWorldPosition(new THREE.Vector3()).y - measureWheelRadius(o));
+    });
+    const groundOffset = Number.isFinite(contact) ? contact - vp.y : 0;
+
+    /** Posición del vehículo en el instante `time`, interpolada sobre el camino muestreado. */
+    const posAt = (time: number, out: THREE.Vector3) => {
+      const f = THREE.MathUtils.clamp(time / duration, 0, 1) * PATH_SAMPLES;
+      const i = Math.min(PATH_SAMPLES - 1, Math.floor(f));
+      return out.lerpVectors(path[i]!, path[i + 1]!, f - i);
+    };
+    // Líneas de visión que el terreno y los árboles no pueden tapar: las del
+    // track de Blender y las de la cámara trasera.
+    const sightlines: [THREE.Vector3, THREE.Vector3][] = [];
+    for (let i = 0; i < nf; i += 3) {
+      const f = frames[i]!;
+      const target = posAt(i / fps, new THREE.Vector3());
+      target.y += 1;
+      sightlines.push([new THREE.Vector3(f[0]!, f[1]!, f[2]!), target]);
+    }
+    const hd = new THREE.Vector3();
+    for (let i = 0; i <= PATH_SAMPLES; i += 2) {
+      const time = (i / PATH_SAMPLES) * duration;
+      headingAt(time, hd);
+      const p = path[i]!;
+      sightlines.push([p.clone().addScaledVector(hd, -9.5).setY(p.y + 3.2), p.clone().setY(p.y + 1)]);
+    }
+    land = createProceduralLandscape({
+      path,
+      groundOffset,
+      sightlines,
+      stop: path[path.length - 1]!.clone(),
+      lake: { center: new THREE.Vector3(-137.8, 12, -154.5), level: 12 },
+      sun,
+      fogColor: (scene.fog as THREE.Fog).color,
+    });
+    scene.add(land.group);
+    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__land = land;
+  }
+
+  const groundMeshes: THREE.Mesh[] = land ? [...land.groundMeshes] : [];
+  if (!land) {
+    gltf.scene.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && /^(Paisaje_Terreno|Ruta_Camino|Mirador_Explanada)/.test(o.name)) groundMeshes.push(o as THREE.Mesh);
+    });
+  }
   let charHud: ReturnType<typeof createCharacterHud> | null = null;
 
   // ────────── final: al detenerse la camioneta el conductor se baja y camina al borde del mirador
@@ -207,6 +283,14 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   /** none: película normal · walking: se ha bajado solo y va al borde · done: final alcanzado */
   let ending: 'none' | 'walking' | 'done' = 'none';
   let endingWalkSent = false;
+  let aitzi: Companion | null = null;
+  let waitAitzi = false;
+  const resume = () => {
+    if (t >= duration - 1e-3) t = 0; // tras el final, la película vuelve a empezar
+    ending = 'none';
+    endingWalkSent = false;
+    setPlaying(true);
+  };
   const driver = vehicle && body
     ? createCharacter({
         scene,
@@ -215,10 +299,9 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         body,
         groundMeshes,
         onSeated: () => {
-          if (t >= duration - 1e-3) t = 0; // tras el final, la película vuelve a empezar
-          ending = 'none';
-          endingWalkSent = false;
-          setPlaying(true);
+          // con acompañante, la película sigue cuando los dos están sentados
+          if (aitzi && !aitzi.seated) waitAitzi = true;
+          else resume();
         },
         onSay: (text, ms) => charHud?.say(text, ms),
       })
@@ -342,6 +425,18 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
     } else if (driver.state === 'foot') board();
     else if (driver.state === 'drive') setPlaying(true);
   };
+  if (driver && aitziGltf && vehicle && body) {
+    aitzi = createCompanion({
+      scene,
+      gltf: aitziGltf,
+      vehicle,
+      body,
+      groundMeshes,
+      driver,
+      host: hud.parentElement ?? document.body,
+    });
+    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__aitzi = aitzi;
+  }
   if (driver) {
     charHud = createCharacterHud({ host: hud.parentElement ?? document.body, canvas: renderer.domElement, character: driver, onBoard: board });
   }
@@ -353,6 +448,13 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
       setTime: (v: number) => { t = v; },
       hold: (v: boolean) => { playing = !v; },
       setFree: () => { while (cam !== 'libre') camBtn.click(); },
+      /** cámara libre en `eye` mirando a `target` (mundo) */
+      look: (eye: THREE.Vector3, target: THREE.Vector3) => {
+        while (cam !== 'libre') camBtn.click();
+        camera.position.copy(eye);
+        controls.target.copy(target);
+        controls.update();
+      },
     };
   }
   seek.oninput = () => {
@@ -489,7 +591,7 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   }
 
   return {
-    id: 'cinematic',
+    id: procedural ? 'cinematic-three' : 'cinematic',
     update(dt) {
       // Restaura la pose sin desviar antes de recalcular la cámara: la trasera
       // interpola desde su posición actual y leer la pose ya desviada por el peek
@@ -521,6 +623,14 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         endingWalkSent = driver.walkTo(p, lakeYaw);
       }
       if (driver && charHud) driver.update(dt, charHud.input(camera));
+      if (driver && aitzi) {
+        // ella se baja detrás de él y vuelve a su puerta cuando él va a la suya
+        const ds = driver.state;
+        if (aitzi.seated && ds !== 'drive' && ds !== 'entering' && !driver.boarding) aitzi.exitVehicle();
+        if (aitzi.state === 'foot' && (driver.boarding || ds === 'entering')) aitzi.board();
+        aitzi.update(dt);
+        if (waitAitzi && aitzi.seated && ds === 'drive') { waitAitzi = false; resume(); }
+      }
 
       const onFoot = !!driver && driver.state !== 'drive';
       const wantFootCam = onFoot && !(ending === 'walking' && playing);
@@ -553,6 +663,7 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         camera.position.y += (Math.random() - 0.5) * k;
       }
       charHud?.update(camera);
+      land?.update(camera);
 
       seek.value = String(t / duration);
       timeEl.textContent = `${t.toFixed(1)} / ${duration.toFixed(0)} s`;
@@ -560,11 +671,16 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
     dispose() {
       window.removeEventListener('keydown', onKey);
       charHud?.dispose();
+      aitzi?.dispose();
       driver?.dispose();
       peek.dispose();
       controls.dispose();
       mixer.stopAllAction();
       scene.remove(gltf.scene, sky, hemi, dir, dir.target, fill);
+      if (land) {
+        scene.remove(land.group);
+        land.dispose();
+      }
       disposeObject(gltf.scene);
       sky.geometry.dispose();
       (sky.material as THREE.Material).dispose();

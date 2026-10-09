@@ -16,10 +16,14 @@ const loader = new GLTFLoader().setDRACOLoader(draco);
  */
 export const MODELS = {
   scene: 'escena.glb',
+  /** escena.glb sin paisaje: camioneta + perro animados (scripts/extract-cinematic-vehicle.mjs). */
+  vehicleScene: 'escena-vehiculo.glb',
   truck: 'f100-truck.glb',
   cameraTrack: 'camara.json',
   /** Conductor de la cinemática (scripts/optimize-character.mjs). */
   character: 'personaje.glb',
+  /** Aitziber, la acompañante de la cinemática three.js (scripts/optimize-aitzi.mjs). */
+  companion: 'aitzi.glb',
 } as const;
 
 export const asset = (file: string) => `${import.meta.env.BASE_URL}models/${file}`;
