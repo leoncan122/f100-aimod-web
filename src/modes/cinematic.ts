@@ -156,6 +156,16 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
     mixer.setTime(0);
   }
 
+  // Instante en que la camioneta se detiene definitivamente (llega al mirador): a
+  // partir de ahí la posición ya no cambia hasta el final de la película.
+  let stopT = duration;
+  if (path.length > 1) {
+    const last = path[path.length - 1]!;
+    let i = path.length - 1;
+    while (i > 0 && path[i - 1]!.distanceTo(last) < 0.05) i--;
+    stopT = (i / PATH_SAMPLES) * duration;
+  }
+
   /** Rumbo horizontal normalizado del camión en el instante `time`. */
   const headingAt = (time: number, out: THREE.Vector3) => {
     if (path.length < 2) return out.set(0, 0, 1);
@@ -183,6 +193,20 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   mixer.setTime(0);
   gltf.scene.updateMatrixWorld(true);
   let charHud: ReturnType<typeof createCharacterHud> | null = null;
+
+  // ────────── final: al detenerse la camioneta el conductor se baja y camina al borde del mirador
+  // Medido sobre el terreno: la explanada (y 25,5) es llana ~11 m por delante de la
+  // camioneta; a ~17 m hay un lomo (y ~26,1) y detrás el terreno cae hacia el lago
+  // (y 12). Ese lomo es el borde con vista más cercano al perro, que va en la caja:
+  // queda a ~18 m de él, cerca pero sin pegarse.
+  const OVERLOOK = new THREE.Vector3(-114.95, 0, -237.9);
+  const lake = gltf.scene.getObjectByName('Lago_Agua');
+  const lakeCenter = new THREE.Vector3(-137.8, 12, -154.5);
+  if (lake) new THREE.Box3().setFromObject(lake).getCenter(lakeCenter);
+  const lakeYaw = Math.atan2(lakeCenter.x - OVERLOOK.x, lakeCenter.z - OVERLOOK.z);
+  /** none: película normal · walking: se ha bajado solo y va al borde · done: final alcanzado */
+  let ending: 'none' | 'walking' | 'done' = 'none';
+  let endingWalkSent = false;
   const driver = vehicle && body
     ? createCharacter({
         scene,
@@ -190,7 +214,12 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
         vehicle,
         body,
         groundMeshes,
-        onSeated: () => setPlaying(true),
+        onSeated: () => {
+          if (t >= duration - 1e-3) t = 0; // tras el final, la película vuelve a empezar
+          ending = 'none';
+          endingWalkSent = false;
+          setPlaying(true);
+        },
         onSay: (text, ms) => charHud?.say(text, ms),
       })
     : null;
@@ -328,6 +357,7 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
   }
   seek.oninput = () => {
     t = Number(seek.value) * duration;
+    if (t < stopT) { ending = 'none'; endingWalkSent = false; }
   };
   camBtn.onclick = () => {
     cam = CAMS[(CAMS.indexOf(cam) + 1) % CAMS.length]!;
@@ -415,10 +445,18 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
       peek.setEnabled(false);
       controls.enabled = true;
       driver.chest(followTarget);
-      const out = new THREE.Vector3(-1, 0, 0).transformDirection((truck as THREE.Object3D).matrixWorld).setY(0).normalize();
-      const fwd = new THREE.Vector3(0, 0, -1).transformDirection((truck as THREE.Object3D).matrixWorld).setY(0).normalize();
       camFrom.copy(camera.position);
-      camTo.copy(followTarget).addScaledVector(out, 3.6).addScaledVector(fwd, 2.2).setY(followTarget.y + 0.9);
+      if (ending === 'walking') {
+        // por detrás del hombro, con el lago al fondo
+        ending = 'done';
+        const toLake = new THREE.Vector3(Math.sin(lakeYaw), 0, Math.cos(lakeYaw));
+        const side = new THREE.Vector3(toLake.z, 0, -toLake.x);
+        camTo.copy(followTarget).addScaledVector(toLake, -3.4).addScaledVector(side, 0.9).setY(followTarget.y + 0.7);
+      } else {
+        const out = new THREE.Vector3(-1, 0, 0).transformDirection((truck as THREE.Object3D).matrixWorld).setY(0).normalize();
+        const fwd = new THREE.Vector3(0, 0, -1).transformDirection((truck as THREE.Object3D).matrixWorld).setY(0).normalize();
+        camTo.copy(followTarget).addScaledVector(out, 3.6).addScaledVector(fwd, 2.2).setY(followTarget.y + 0.9);
+      }
       camTween = 0;
       controls.target.copy(followTarget);
       controls.minDistance = 1;
@@ -460,15 +498,33 @@ export async function createCinematicMode(deps: CinematicDeps): Promise<ViewerMo
 
       if (playing) {
         t += dt;
-        if (t > duration) t = 0;
+        if (t > duration) {
+          if (driver) {
+            // con conductor no se repite sola: se queda en el último plano y el control pasa al usuario
+            t = duration;
+            setPlaying(false);
+          } else t = 0;
+        }
       }
       mixer.setTime(t);
       // el conductor necesita la carrocería de ESTE frame (el render actualiza matrices después)
       if (truck) (truck as THREE.Object3D).updateWorldMatrix(true, true);
+      // final: se baja al detenerse la camioneta (ya colocada en este frame) y camina al mirador
+      if (driver && playing && ending === 'none' && driver.state === 'drive' && t >= stopT + 0.6 && t < duration - 0.5) {
+        driver.exitVehicle();
+        ending = 'walking';
+        endingWalkSent = false;
+      }
+      if (driver && ending === 'walking' && !endingWalkSent && driver.state === 'foot') {
+        const p = OVERLOOK.clone();
+        p.y = driver.groundAt(p.x, p.z);
+        endingWalkSent = driver.walkTo(p, lakeYaw);
+      }
       if (driver && charHud) driver.update(dt, charHud.input(camera));
 
       const onFoot = !!driver && driver.state !== 'drive';
-      if (onFoot !== footCam) setFootCam(onFoot);
+      const wantFootCam = onFoot && !(ending === 'walking' && playing);
+      if (wantFootCam !== footCam) setFootCam(wantFootCam);
       seek.disabled = onFoot;
       camBtn.disabled = onFoot;
       if (footCam && driver) followDriver(dt);

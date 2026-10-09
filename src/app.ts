@@ -62,6 +62,11 @@ export function createApp(root: HTMLElement) {
       const w = window as unknown as Record<string, unknown>;
       w.__scene = scene;
       w.__camera = camera;
+      // avanza n frames a mano (la pestaña oculta no recibe requestAnimationFrame)
+      w.__step = (n: number, dt = 1 / 30) => {
+        for (let i = 0; i < n; i++) mode?.update(dt);
+        renderer.render(scene, camera);
+      };
     }
 
     const deps = { renderer, camera, scene, hud, onProgress };

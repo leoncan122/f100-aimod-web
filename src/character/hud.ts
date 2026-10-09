@@ -201,7 +201,8 @@ export function createCharacterHud(opts: CharacterHudOptions) {
         hint.textContent =
           st === 'drive' ? 'Pausa para que se baje de la camioneta'
           : st === 'exiting' ? 'Bajando…'
-          : st === 'approach' || st === 'entering' ? 'Volviendo a la camioneta…'
+          : st === 'entering' || (st === 'approach' && ch.boarding) ? 'Volviendo a la camioneta…'
+          : st === 'approach' ? 'Caminando hacia el borde del mirador…'
           : 'WASD para caminar · Shift corre · clic sobre él para saludar';
         if (!foot) { keys.clear(); run = false; }
       }

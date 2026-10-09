@@ -432,6 +432,10 @@ export function createCharacter(opts: CharacterOptions) {
   // pose de salida/entrada: desde el asiento hasta la puerta
   const exitFrom = { pos: V(), quat: Q() };
   const exitTo = { pos: V(), yaw: 0 };
+  /** a dónde camina solo en `approach`: la puerta (para subirse) o un punto cualquiera */
+  let goal: { pos: THREE.Vector3; yaw: number | null; enter: boolean } | null = null;
+  /** rumbo al que girar en el sitio al llegar (mirar al lago, por ejemplo) */
+  let faceYaw: number | null = null;
 
   const allBones = Object.values(B);
   const LEG = { L: ['thighL', 'shinL', 'footL', 'toeL'].map((n) => B[n]!), R: ['thighR', 'shinR', 'footR', 'toeR'].map((n) => B[n]!) };
@@ -739,7 +743,19 @@ export function createCharacter(opts: CharacterOptions) {
     if (kneel.target) kneel.target = 0;
     if (gun.state !== 'holstered' && gun.state !== 'stow' && gun.state !== 'lower') { gun.state = 'lower'; gun.t = 0; gun.from = null; }
     waveT = -1;
+    goal = { pos: doorWorld(), yaw: null, enter: true };
+    faceYaw = null;
     state = 'approach';
+  }
+  /** Camina solo hasta `point` (mundo) y, si se da `yaw`, se gira hacia él al llegar. */
+  function walkTo(point: THREE.Vector3, yaw: number | null = null) {
+    if (state !== 'foot') return false;
+    if (kneel.target) kneel.target = 0;
+    waveT = -1;
+    goal = { pos: point.clone(), yaw, enter: false };
+    faceYaw = null;
+    state = 'approach';
+    return true;
   }
 
   // ───────────────────────── bucle
@@ -755,17 +771,23 @@ export function createCharacter(opts: CharacterOptions) {
     if (!foot || kneel.k > 0.02) mv.set(0, 0, 0);
     let targetSpeed = 0, wantHeading = heading;
     const armed = gun.state !== 'holstered';
-    if (state === 'approach') {
-      const door = doorWorld();
-      tmp.subVectors(door, root.position).setY(0);
+    if (state === 'approach' && goal) {
+      if (goal.enter) goal.pos.copy(doorWorld()); // la camioneta puede haberse movido
+      tmp.subVectors(goal.pos, root.position).setY(0);
       const dist = tmp.length();
-      if (dist < 0.3 && J.t < 0 && (gun.state === 'holstered')) {
+      if (dist < 0.3 && J.t < 0 && (gun.state === 'holstered' || !goal.enter)) {
         speed = Math.max(0, speed - dt * 6);
         if (speed < 0.05) {
-          exitFrom.pos.copy(root.position);
-          exitTo.pos.copy(root.position);
-          exitTo.yaw = heading;
-          state = 'entering';
+          if (goal.enter) {
+            exitFrom.pos.copy(root.position);
+            exitTo.pos.copy(root.position);
+            exitTo.yaw = heading;
+            state = 'entering';
+          } else {
+            faceYaw = goal.yaw;
+            state = 'foot';
+          }
+          goal = null;
           stateT = 0;
         }
       } else {
@@ -773,6 +795,7 @@ export function createCharacter(opts: CharacterOptions) {
         wantHeading = Math.atan2(tmp.x, tmp.z);
       }
     } else if (mv.lengthSq() > 0.0025) {
+      faceYaw = null;
       if (kneel.target) kneel.target = 0;
       const running = input.run && !armed;
       targetSpeed = running ? RUN : WALK * Math.max(0.5, Math.min(1, mv.length()));
@@ -786,6 +809,12 @@ export function createCharacter(opts: CharacterOptions) {
       const maxTurn = lerp(7, 3.2, ss(1.5, 4.4, speed)) * (jumping ? 0 : 1);
       const turn = clamp(angDiff(heading, wantHeading), -maxTurn * dt, maxTurn * dt);
       if (speed > 0.05 || targetSpeed > 0) heading += turn;
+      else if (faceYaw !== null && J.t < 0) {
+        // girar en el sitio, sin prisa, hasta quedar mirando a donde toca
+        const dy = angDiff(heading, faceYaw);
+        heading += clamp(dy, -2.2 * dt, 2.2 * dt);
+        if (Math.abs(dy) < 0.01) faceYaw = null;
+      }
       yawRate += (turn / Math.max(dt, 1e-4) - yawRate) * (1 - Math.exp(-dt * 6));
       if (speed > 0.001 && !jumping) {
         root.position.x += Math.sin(heading) * speed * dt;
@@ -1171,6 +1200,10 @@ export function createCharacter(opts: CharacterOptions) {
   return {
     root,
     get state() { return state; },
+    /** True si en `approach` va hacia la puerta (y no a otro punto). */
+    get boarding() { return state === 'approach' && !!goal?.enter; },
+    /** Rumbo actual del personaje en el plano (rad). */
+    get heading() { return heading; },
     get armed() { return gun.state !== 'holstered'; },
     get aiming() { return gun.state === 'aim'; },
     get kneeling() { return kneel.target === 1; },
@@ -1182,6 +1215,9 @@ export function createCharacter(opts: CharacterOptions) {
     setVoice(shape: () => [number, number, number] | null, onset: () => boolean) { voiceShape = shape; voiceOnset = onset; },
     exitVehicle,
     enterVehicle,
+    walkTo,
+    /** Altura del suelo del parche de terreno (tras bajarse). */
+    groundAt: (x: number, z: number) => groundY(x, z),
     startJump,
     toggleKneel,
     toggleGun,
