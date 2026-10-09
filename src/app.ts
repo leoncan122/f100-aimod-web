@@ -10,6 +10,7 @@ export function createApp(root: HTMLElement) {
     <div id="viewport"></div>
     <div id="tabs">
       <button class="tab on" data-mode="cinematic">Cinemática</button>
+      <button class="tab" data-mode="cinematic-three">Cinemática three.js</button>
       <button class="tab" data-mode="orbit">Modelo</button>
       <button class="tab" data-mode="desert">Desierto</button>
     </div>
@@ -62,6 +63,11 @@ export function createApp(root: HTMLElement) {
       const w = window as unknown as Record<string, unknown>;
       w.__scene = scene;
       w.__camera = camera;
+      // avanza n frames a mano (la pestaña oculta no recibe requestAnimationFrame)
+      w.__step = (n: number, dt = 1 / 30) => {
+        for (let i = 0; i < n; i++) mode?.update(dt);
+        renderer.render(scene, camera);
+      };
     }
 
     const deps = { renderer, camera, scene, hud, onProgress };
@@ -70,6 +76,7 @@ export function createApp(root: HTMLElement) {
       // cualquier id desconocido caia silenciosamente en el desierto.
       const factories: Record<ModeId, (d: typeof deps) => Promise<ViewerMode>> = {
         cinematic: createCinematicMode,
+        'cinematic-three': (d) => createCinematicMode(d, { landscape: 'three' }),
         orbit: createOrbitMode,
         desert: createDesertMode,
       };

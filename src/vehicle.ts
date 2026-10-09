@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { removeTransmission } from './loaders';
 
 const VEHICLE_NAMES = ['HandlerVehicle005', 'HandlerVehicle.005'];
 
@@ -22,7 +23,7 @@ export interface Vehicle {
  * No sirve un Box3 del nodo: engloba frenos y suspensión, que sobresalen por
  * detrás del neumático y dan un radio inflado (0.52 m en vez de 0.37 m).
  */
-function measureWheelRadius(node: THREE.Object3D): number {
+export function measureWheelRadius(node: THREE.Object3D): number {
   const inv = new THREE.Matrix4().copy(node.matrixWorld).invert();
   const p = new THREE.Vector3();
   let rMax = 0;
@@ -90,6 +91,9 @@ export function extractVehicle(gltf: GLTF): Vehicle {
   } else {
     root.add(gltf.scene);
   }
+
+  // la transmisión duplica el coste del frame (ver removeTransmission)
+  removeTransmission(root);
 
   const wheels: THREE.Object3D[] = [];
   const steering: THREE.Object3D[] = [];

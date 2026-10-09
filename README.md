@@ -205,3 +205,26 @@ suspensión **no negativo** y de amplitud pequeña (≤ 4 mm).
 
 `npm run test:grounding` verifica el hueco en 8 instantes del bucle y falla si
 supera ±5 mm. Peor caso actual: **2,2 mm**.
+
+## Conductor (modo Cinemática)
+
+El personaje de Meshy (`public/models/personaje.glb`, esqueleto real + dedos
+riggeados en Blender; se regenera con `node scripts/optimize-character.mjs <entrada.glb>`)
+va al volante de la F100 durante la película: pelvis en el banco, manos al aro y
+pies al suelo de la cabina por IK, sobre cotas medidas en `escena.glb`.
+
+- **Pausa** → se baja por la puerta del conductor y se controla a pie sobre el
+  terreno real (mapa de alturas rasterizado una vez alrededor del punto de bajada):
+  `WASD`, `Shift` corre, `Espacio` salta, `K` rodilla, `G` arma, `F` dispara,
+  `E` vuelve a la camioneta y la película sigue.
+- **Final**: cuando la camioneta se detiene en el mirador (~57 s) se baja solo y
+  camina hasta el lomo de la explanada desde el que se ve el lago (a ~18 m del
+  perro), y se queda mirándolo. La película ya no se repite sola: al terminar, la
+  cámara pasa por detrás de su hombro y el control queda para el usuario; `Play`
+  lo devuelve al asiento y empieza de nuevo.
+- **Hablar**: texto con la voz del navegador, o grabaciones propias (micrófono o
+  archivo) guardadas en IndexedDB; la boca se mueve con morphs creados en tiempo de
+  ejecución, porque el rig no trae mandíbula.
+
+En dev, `window.__driver`, `window.__cine` y `window.__step(n)` permiten probarlo
+sin depender de `requestAnimationFrame` (pestaña oculta).
