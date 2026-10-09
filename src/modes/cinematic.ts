@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
-import { loadGLTF, loadJSON, disposeObject, MODELS } from '../loaders';
+import { loadGLTF, loadJSON, disposeObject, removeTransmission, MODELS } from '../loaders';
 import { measureWheelRadius } from '../vehicle';
 import { createProceduralLandscape } from '../landscape/procedural';
 import type { Landscape } from '../landscape/procedural';
@@ -133,6 +133,8 @@ export async function createCinematicMode(
   }
 
   scene.add(gltf.scene);
+  // sin esto la escena se renderiza dos veces por frame (ver removeTransmission)
+  removeTransmission(gltf.scene);
 
   let truck: THREE.Object3D | null = null;
   gltf.scene.traverse((o) => {
@@ -141,8 +143,6 @@ export async function createCinematicMode(
       const big = o.name.startsWith('Paisaje') || o.name.startsWith('Lago');
       o.castShadow = !big;
       o.receiveShadow = true;
-      const mat = mesh.material as THREE.MeshPhysicalMaterial | undefined;
-      if (mat && !mat.transparent && (mat.transmission ?? 0) > 0) mat.transparent = true;
     }
     if (o.name === 'HandlerVehicle005' || o.name === 'HandlerVehicle.005') truck = o;
     // El agua procedural de Blender no se exporta: material físico equivalente.

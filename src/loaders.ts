@@ -66,3 +66,41 @@ export function disposeObject(root: THREE.Object3D) {
 export function disposeLoaders() {
   draco.dispose();
 }
+
+/**
+ * Quita la transmisión (refracción) de los materiales de la camioneta.
+ *
+ * Con un solo material visible con `transmission > 0`, three.js renderiza cada
+ * frame la escena entera una vez más en una textura para que el cristal "vea"
+ * lo que tiene detrás: el coste del frame se duplica (medido a 1080p en Intel
+ * UHD: ~30 → ~15 ms). En la F100 la traen tres materiales exportados de Blender:
+ *  - `Metal` (llantas Pontiac): transmisión 1, un error — el metal no es translúcido.
+ *  - `Faro_Vidrio` y `Faro_Posicion`: cristal de faros y pilotos; con una
+ *    transparencia normal (como `Vidrio_Cabina`) se ven igual por mucho menos.
+ * Devuelve cuántos materiales se han cambiado.
+ */
+export function removeTransmission(root: THREE.Object3D): number {
+  const done = new Set<THREE.Material>();
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const mat = m as THREE.MeshPhysicalMaterial;
+      if (!mat?.isMeshPhysicalMaterial || done.has(mat) || !(mat.transmission > 0)) continue;
+      const glass = /vidrio|faro|posici|cristal|glass|lens/i.test(mat.name);
+      if (glass) {
+        // cristal: transparencia simple, más opaca cuanto menos dejaba pasar
+        mat.opacity = THREE.MathUtils.lerp(1, 0.3, mat.transmission);
+        mat.transparent = true;
+        mat.depthWrite = false;
+      } else {
+        mat.transparent = false;
+        mat.opacity = 1;
+      }
+      mat.transmission = 0;
+      mat.needsUpdate = true;
+      done.add(mat);
+    }
+  });
+  return done.size;
+}

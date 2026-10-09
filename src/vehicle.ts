@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { removeTransmission } from './loaders';
 
 const VEHICLE_NAMES = ['HandlerVehicle005', 'HandlerVehicle.005'];
 
@@ -90,6 +91,9 @@ export function extractVehicle(gltf: GLTF): Vehicle {
   } else {
     root.add(gltf.scene);
   }
+
+  // la transmisión duplica el coste del frame (ver removeTransmission)
+  removeTransmission(root);
 
   const wheels: THREE.Object3D[] = [];
   const steering: THREE.Object3D[] = [];
