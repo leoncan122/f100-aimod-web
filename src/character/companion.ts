@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { buildHeightfield } from './terrain';
 import type { Heightfield } from './terrain';
+import { measureBody, separate, pushFromSegment, roundRadius } from './body';
+import type { BodyCollider, BodyShape, Segment } from './body';
 
 /**
  * Aitziber: la acompañante del conductor en la cinemática three.js.
@@ -27,7 +29,16 @@ export interface CompanionDriver {
   root: THREE.Object3D;
   readonly heading: number;
   readonly state: string;
+  /** su silueta para colisiones */
+  body(): BodyCollider;
   chest(out?: THREE.Vector3): THREE.Vector3;
+  /** posición de mundo de uno de sus huesos */
+  anchor(name: string, out?: THREE.Vector3): THREE.Vector3;
+  setSocial(o: { look?: THREE.Vector3 | null; engaged?: boolean }): void;
+  face(yaw: number): void;
+  setEmbrace(w: number, L?: THREE.Vector3, R?: THREE.Vector3, lean?: number, pole?: number): void;
+  setObstacles(list: { c: BodyCollider; gap: number }[]): void;
+  wave(): void;
 }
 
 export interface CompanionOptions {
@@ -174,7 +185,11 @@ function cabLegs(p: Pose, k: number) {
 
 // ───────────────────────── gestos (sin desplazamiento de raíz salvo `fwd`)
 type GestureId = 'wave' | 'laugh' | 'jump' | 'hug' | 'kiss';
-interface GestureCtx { partnerL: THREE.Vector3; partnerR: THREE.Vector3; wrist: (S: 'L' | 'R', target: THREE.Vector3) => THREE.Vector3; yaw: number }
+/** Puntos reales del cuerpo de él (mundo) y su marco, para apoyar las manos por IK. */
+interface Partner { chest: THREE.Vector3; hips: THREE.Vector3; shoulderL: THREE.Vector3; shoulderR: THREE.Vector3; fwd: THREE.Vector3; left: THREE.Vector3; back: number }
+interface GestureCtx { partner: Partner; wrist: (S: 'L' | 'R', target: THREE.Vector3) => THREE.Vector3; yaw: number }
+/** Holgura entre siluetas: caminando no se rozan; en abrazo y beso se tocan. */
+const GAP_WALK = 0.04, GAP_TOUCH = -0.015;
 interface Gesture { label: string; dur: number; near?: number; fn: (t: number, c: GestureCtx) => Pose & { fwd?: number } }
 
 const GESTURES: Record<GestureId, Gesture> = {
@@ -230,7 +245,7 @@ const GESTURES: Record<GestureId, Gesture> = {
     return p;
   } },
   // Abrazo y beso: se colocan delante del conductor (`near` m) antes de empezar.
-  hug: { label: 'Abrazándole', dur: 5, near: 0.42, fn(t) {
+  hug: { label: 'Abrazándole', dur: 5, near: 0.34, fn(t, c) {
     const p = base(P(), t), e = env(t, 0, 5, 0.4);
     const open = ease(t / 0.8) * (1 - ease((t - 0.9) / 0.6));
     const wrap = ease((t - 0.9) / 0.7) * (1 - ease((t - 4.2) / 0.6));
@@ -247,6 +262,17 @@ const GESTURES: Record<GestureId, Gesture> = {
     add(p, 'L_foot', 0.25 * wrap, 0, 0, e); add(p, 'R_foot', 0.25 * wrap, 0, 0, e);
     add(p, 'R_thigh', 0.1 * wrap, 0, 0, e); add(p, 'R_shin', 0.85 * wrap * ease((t - 1.6) / 0.5), 0, 0, e);
     p.off[1] += 0.035 * wrap * e; p.off[2] += 0.03 * wrap * e;
+    if (wrap * e > 0.001) {
+      // manos a su espalda: la izquierda alta (por su costado derecho), la derecha más baja
+      const { chest, hips, fwd, left } = c.partner;
+      const myLeft = V(Math.cos(c.yaw), 0, -Math.sin(c.yaw));
+      // sobre la superficie real de su espalda (silueta medida), no a una profundidad fija
+      const backD = c.partner.back * 0.85;
+      const hiL = chest.clone().addScaledVector(fwd, -backD).addScaledVector(left, -0.1).add(V(0, 0.04, 0));
+      const loR = chest.clone().lerp(hips, 0.55).addScaledVector(fwd, -backD).addScaledVector(left, 0.1);
+      p.ik.push({ side: 'L', target: c.wrist('L', hiL), w: wrap * e, pole: myLeft.clone().multiplyScalar(0.9).add(V(0, -0.3, 0)) });
+      p.ik.push({ side: 'R', target: c.wrist('R', loR), w: wrap * e, pole: myLeft.multiplyScalar(-0.9).add(V(0, -0.3, 0)) });
+    }
     return p;
   } },
   kiss: { label: 'Dándole un beso', dur: 5.6, near: 0.5, fn(t, c) {
@@ -265,8 +291,11 @@ const GESTURES: Record<GestureId, Gesture> = {
     if (close > 0.001) {
       // manos sobre él: la derecha en su hombro izquierdo, la izquierda en su brazo derecho
       const right = V(-Math.cos(c.yaw), 0, Math.sin(c.yaw));
-      p.ik.push({ side: 'R', target: c.wrist('R', c.partnerL), w: close, pole: right.clone().multiplyScalar(0.7).add(V(0, -1, 0)) });
-      p.ik.push({ side: 'L', target: c.wrist('L', c.partnerR), w: close, pole: right.multiplyScalar(-0.7).add(V(0, -1, 0)) });
+      // sobre sus huesos reales: la derecha en su hombro izquierdo, la izquierda en su brazo derecho
+      const onShoulder = c.partner.shoulderL.clone().add(V(0, 0.03, 0)).addScaledVector(c.partner.fwd, 0.02);
+      const onArm = c.partner.shoulderR.clone().add(V(0, -0.12, 0)).addScaledVector(c.partner.fwd, 0.03);
+      p.ik.push({ side: 'R', target: c.wrist('R', onShoulder), w: close, pole: right.clone().multiplyScalar(0.7).add(V(0, -1, 0)) });
+      p.ik.push({ side: 'L', target: c.wrist('L', onArm), w: close, pole: right.multiplyScalar(-0.7).add(V(0, -1, 0)) });
     }
     add(p, 'R_upperarm', -1.0 - 0.35 * toss, 0, 0.3 - 0.2 * toss, blow); add(p, 'R_forearm', -2.2 + 1.55 * toss, 0, 0.2, blow); add(p, 'R_hand', 0.25 - 0.55 * toss, 0, 0, blow);
     curl(p, 'R', 0.7 * (1 - toss), 0.5 * (1 - toss), 0.6 * (1 - toss), blow); openHand(p, 'R', blow * toss);
@@ -306,6 +335,19 @@ export function createCompanion(opts: CompanionOptions) {
     bones[n] = b;
   }
   const hipsRest = bones.hips.position.clone();
+  const skinMeshes: THREE.Mesh[] = [];
+  gltf.scene.traverse((o) => { if ((o as THREE.Mesh).isMesh) skinMeshes.push(o as THREE.Mesh); });
+  /** silueta del torso; se mide sobre la malla al quedarse de pie y quieta */
+  let shape: BodyShape = { front: 0.15, back: 0.14, half: 0.26 };
+  let measured = false;
+  /** puertas abiertas de la camioneta */
+  let segments: Segment[] = [];
+  const myBody = (): BodyCollider => ({ x: pos.x, z: pos.z, yaw: heading, shape });
+  /** distancia entre raíces para un gesto cercano: pecho con pecho (abrazo) o un paso más (beso) */
+  const nearFor = (id: GestureId) => {
+    const his = driver.body().shape;
+    return id === 'hug' ? shape.front + his.front + 0.01 : shape.front + his.front + 0.16;
+  };
   const TW_AXIS: Partial<Record<Bone, THREE.Vector3>> = {};
   for (const [n, c] of Object.entries(TWIST_CHILD) as [Bone, Bone][]) TW_AXIS[n] = bones[c].position.clone().normalize();
 
@@ -461,6 +503,65 @@ export function createCompanion(opts: CompanionOptions) {
   const driverLeft = () => V(Math.cos(driver.heading), 0, -Math.sin(driver.heading));
   const driverOnFoot = () => driver.state === 'foot' || driver.state === 'approach';
 
+  /** Puntos reales del cuerpo de él. */
+  const partner = (): Partner => ({
+    chest: driver.anchor('spine003'),
+    hips: driver.anchor('spine'),
+    shoulderL: driver.anchor('upper_armL'),
+    shoulderR: driver.anchor('upper_armR'),
+    fwd: driverFwd(),
+    left: driverLeft(),
+    back: driver.body().shape.back,
+  });
+
+  /**
+   * Lo que hace él mientras ella actúa: la mira, se queda quieto si es algo
+   * cercano, devuelve el abrazo con sus brazos (IK sobre la espalda de ella),
+   * le pone las manos en la cintura en el beso e inclina el pecho hacia ella.
+   */
+  let socialOn = false;
+  function syncPartner() {
+    const onFoot = driverOnFoot();
+    // cápsula de ella para él (en abrazo/beso puede acercarse más)
+    const busyNear = !!(gesture && GESTURES[gesture.id].near) || !!pending;
+    const herNow: BodyCollider = { x: actor.position.x, z: actor.position.z, yaw: heading, shape };
+    driver.setObstacles(state !== 'seated' ? [{ c: herNow, gap: busyNear ? GAP_TOUCH : GAP_WALK }] : []);
+    const id = gesture?.id ?? pending;
+    if (!onFoot || !id) {
+      if (socialOn) { driver.setSocial({ look: null, engaged: false }); driver.setEmbrace(0); socialOn = false; }
+      return;
+    }
+    socialOn = true;
+    const near = !!GESTURES[id].near;
+    const herHead = bones.head.getWorldPosition(V());
+    const herChest = bones.chest.getWorldPosition(V()), herHips = bones.spine.getWorldPosition(V());
+    const fwd = V(Math.sin(heading), 0, Math.cos(heading)), left = V(Math.cos(heading), 0, -Math.sin(heading));
+    let look: THREE.Vector3 = herHead;
+    let w = 0, lean = 0, pole = 1;
+    let L: THREE.Vector3 | undefined, R: THREE.Vector3 | undefined;
+    const tt = gesture?.t ?? 0;
+    if (gesture?.id === 'hug') {
+      w = ease((tt - 1.05) / 0.7) * (1 - ease((tt - 4.1) / 0.6));
+      // su izquierda al costado derecho de ella (alta), su derecha más baja: brazos cruzados en la espalda
+      const backD = shape.back * 0.85;
+      L = herChest.clone().lerp(herHips, 0.25).addScaledVector(fwd, -backD).addScaledVector(left, -0.1);
+      R = herChest.clone().lerp(herHips, 0.75).addScaledVector(fwd, -backD).addScaledVector(left, 0.1);
+      lean = 0.07;
+      // mejilla con mejilla: mira por encima del hombro de ella
+      look = herHead.clone().addScaledVector(driverLeft(), -0.45 * w);
+    } else if (gesture?.id === 'kiss') {
+      const close = ease(tt / 0.8) * (1 - ease((tt - 2.6) / 0.6));
+      const leanK = ease((tt - 0.7) / 0.6) * (1 - ease((tt - 2.3) / 0.5));
+      w = 0.85 * close;
+      L = herHips.clone().add(V(0, 0.06, 0)).addScaledVector(left, -0.15);
+      R = herHips.clone().add(V(0, 0.06, 0)).addScaledVector(left, 0.15);
+      lean = (0.13 * leanK) / Math.max(w, 1e-3);
+      pole = 1.3;
+    }
+    driver.setSocial({ look, engaged: near });
+    driver.setEmbrace(w, L, R, lean, pole);
+  }
+
   // ── acciones públicas
   function exitVehicle() {
     if (state !== 'seated') return;
@@ -494,6 +595,8 @@ export function createCompanion(opts: CompanionOptions) {
     label = GESTURES[id].label;
     FX[id]();
     setPoseKey(`g:${id}`, 0.45);
+    // él le devuelve el saludo
+    if (id === 'wave') later(0.6, () => { if (driverOnFoot()) driver.wave(); });
   }
 
   /** Mueve hacia `goal` con el paso natural; devuelve la distancia restante. */
@@ -554,7 +657,7 @@ export function createCompanion(opts: CompanionOptions) {
   }
 
   /** Fuera de la camioneta y sin pisar al conductor. */
-  function collide(minDriver: number) {
+  function collide(gap: number) {
     const local = pos.clone().applyMatrix4(vehicle.matrixWorld.clone().invert());
     const R = 0.25;
     if (local.x > vBox.min.x - R && local.x < vBox.max.x + R && local.z > vBox.min.z - R && local.z < vBox.max.z + R) {
@@ -569,9 +672,12 @@ export function createCompanion(opts: CompanionOptions) {
       pos.z = w.z;
     }
     if (driverOnFoot() || driver.state === 'exiting' || driver.state === 'entering') {
-      const dp = driverPos();
-      const dx = pos.x - dp.x, dz = pos.z - dp.z, d = Math.hypot(dx, dz);
-      if (d < minDriver && d > 1e-4) { pos.x = dp.x + (dx / d) * minDriver; pos.z = dp.z + (dz / d) * minDriver; }
+      const to = separate(myBody(), driver.body(), gap);
+      if (to) { pos.x = to.x; pos.z = to.z; }
+    }
+    for (const sg of segments) {
+      const to = pushFromSegment(pos.x, pos.z, roundRadius(shape), sg);
+      if (to) { pos.x = to.x; pos.z = to.z; }
     }
     if (ground) {
       const lim = ground.half - 2;
@@ -659,7 +765,7 @@ export function createCompanion(opts: CompanionOptions) {
       let goalYaw: number | null = null;
       let maxSpeed = SPEED * 1.25;
       let arrive = 0.15;
-      let minDriver = 0.55;
+      let gap = GAP_WALK;
       if (state === 'boarding') {
         goal = doorWorld();
         goalYaw = vehicleYaw() - Math.PI / 2; // de espaldas a la puerta: se sienta y gira hacia dentro
@@ -673,12 +779,20 @@ export function createCompanion(opts: CompanionOptions) {
           label = 'Subiendo';
         }
       } else if (pending && driverOnFoot()) {
-        const g = GESTURES[pending];
-        goal = driverPos().addScaledVector(driverFwd(), g.near ?? 0.5);
-        goalYaw = driver.heading + Math.PI;
-        minDriver = (g.near ?? 0.5) - 0.05;
+        // se encuentran en la línea que los une: ella va hacia él y él se gira hacia ella
+        const near = nearFor(pending);
+        const dp = driverPos();
+        const u = V(pos.x - dp.x, 0, pos.z - dp.z);
+        if (u.lengthSq() < 1e-4) u.copy(driverFwd());
+        u.normalize();
+        const hisYaw = Math.atan2(u.x, u.z);
+        driver.face(hisYaw);
+        goal = dp.clone().addScaledVector(u, near);
+        goalYaw = Math.atan2(-u.x, -u.z);
+        gap = GAP_TOUCH;
         arrive = 0.08;
-        if (Math.hypot(goal.x - pos.x, goal.z - pos.z) < 0.12 && speed < 0.08 && Math.abs(angDiff(heading, goalYaw)) < 0.12) startGesture(pending);
+        if (Math.hypot(goal.x - pos.x, goal.z - pos.z) < 0.12 && speed < 0.08 && Math.abs(angDiff(heading, goalYaw)) < 0.12
+          && Math.abs(angDiff(driver.heading, hisYaw)) < 0.15) startGesture(pending);
       } else if (!gesture && driverOnFoot()) {
         // a su lado, medio paso por detrás
         goal = driverPos().addScaledVector(driverLeft(), side * 0.95).addScaledVector(driverFwd(), -0.15);
@@ -692,6 +806,7 @@ export function createCompanion(opts: CompanionOptions) {
         gesture.t += dt;
         // si él se va, ella termina el gesto antes
         if (gesture.t >= g.dur || (g.near && !driverOnFoot())) { gesture = null; label = 'De pie'; }
+        else if (g.near) gap = GAP_TOUCH;
       } else if (goal) {
         const r = routeAround(goal);
         const dist = r.direct ? steer(dt, r.to, maxSpeed, arrive) : (steer(dt, r.to, maxSpeed, 0.05), Infinity);
@@ -706,19 +821,20 @@ export function createCompanion(opts: CompanionOptions) {
         if (Math.abs(dy) < 0.01) faceYaw = null;
         phase += (dt / WALK_T) * Math.min(0.5, Math.abs(dy) * 2);
       }
-      collide(minDriver);
+      collide(gap);
+      // silueta real: una vez, de pie y quieta con los brazos colgando
+      if (!measured && state === 'foot' && !gesture && still > 0.6) {
+        actor.position.copy(pos);
+        actor.updateMatrixWorld(true);
+        shape = measureBody(skinMeshes, actor, 0.85, 1.42, 5);
+        measured = true;
+      }
       actor.position.copy(pos);
       actor.rotation.set(0, heading, 0);
 
       if (gesture) {
         const g = GESTURES[gesture.id];
-        const dl = driverLeft();
-        const chest = driver.chest(V());
-        const ctx: GestureCtx = {
-          partnerL: chest.clone().addScaledVector(dl, 0.17).add(V(0, 0.08, 0)),
-          partnerR: chest.clone().addScaledVector(dl, -0.24).add(V(0, -0.06, 0)),
-          wrist, yaw: heading,
-        };
+        const ctx: GestureCtx = { partner: partner(), wrist, yaw: heading };
         const gp = g.fn(gesture.t, ctx);
         if (gp.fwd) actor.position.addScaledVector(V(Math.sin(heading), 0, Math.cos(heading)), gp.fwd);
         p = gp;
@@ -749,6 +865,7 @@ export function createCompanion(opts: CompanionOptions) {
     actor.updateMatrixWorld(true);
     applyPose(p);
     lastPose = p;
+    syncPartner();
 
     // sprites
     for (let i = floaters.length - 1; i >= 0; i--) {
@@ -774,12 +891,19 @@ export function createCompanion(opts: CompanionOptions) {
     root: actor,
     get state() { return state; },
     get seated() { return state === 'seated'; },
+    /** su silueta para colisiones */
+    body: myBody,
     exitVehicle,
     board,
+    /** Puertas abiertas (segmentos en planta) que no puede atravesar a pie. */
+    setSegments(list: Segment[]) { segments = list; },
     request,
     update,
     dispose() {
       window.removeEventListener('keydown', onKey);
+      driver.setObstacles([]);
+      driver.setSocial({ look: null, engaged: false });
+      driver.setEmbrace(0);
       panel.remove();
       for (const f of floaters) { scene.remove(f.s); f.s.material.dispose(); }
       for (const tx of Object.values(TEX)) tx.dispose();

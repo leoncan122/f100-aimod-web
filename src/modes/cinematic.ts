@@ -10,6 +10,7 @@ import { createCharacter } from '../character/character';
 import { createCharacterHud } from '../character/hud';
 import { createCompanion } from '../character/companion';
 import type { Companion } from '../character/companion';
+import type { Segment } from '../character/body';
 import type { CameraTrack, ViewerMode } from '../types';
 
 export interface CinematicDeps {
@@ -386,6 +387,8 @@ export async function createCinematicMode(
     <button id="cam" class="btn" title="Cambiar cámara (tecla C)">Cámara: cinemática</button>
     <input id="seek" type="range" min="0" max="1" step="0.0001" value="0">
     <span id="time" class="time">0.0 s</span>
+    <button id="doorCond" class="btn" hidden title="Puerta del conductor (tecla O)">Puerta conductor <kbd>O</kbd></button>
+    <button id="doorAcomp" class="btn" hidden title="Puerta del acompañante (tecla P)">Puerta acompañante <kbd>P</kbd></button>
   `;
   const playBtn = hud.querySelector<HTMLButtonElement>('#play')!;
   const camBtn = hud.querySelector<HTMLButtonElement>('#cam')!;
@@ -481,9 +484,97 @@ export async function createCinematicMode(
     }
   };
 
+  // ────────── puertas (solo en escena-vehiculo.glb, injertadas desde f100-aimod.blend)
+  // Cada puerta cuelga de su bisagra (PIV_Puerta_*), en la arista delantera:
+  // girar el pivote sobre su Y local la abre hacia fuera. Se abren solas al
+  // bajarse o subirse quien va en ese lado y se cierran cuando se ha alejado;
+  // a pie, además, con su botón (O / P).
+  const DOOR_OPEN = THREE.MathUtils.degToRad(62);
+  const doors = (['Cond', 'Acomp'] as const)
+    .map((side) => ({
+      side,
+      node: gltf.scene.getObjectByName(`PIV_Puerta_${side}`) ?? null,
+      k: 0,
+      manual: false,
+      sign: side === 'Acomp' ? 1 : -1,
+      btn: hud.querySelector<HTMLButtonElement>(`#door${side}`)!,
+    }))
+    .filter((d) => d.node)
+    .map((d) => {
+      // borde trasero de la puerta en el marco de su bisagra: el obstáculo va de la bisagra a él
+      const pivot = d.node!;
+      pivot.updateWorldMatrix(true, true);
+      const inv = pivot.matrixWorld.clone().invert();
+      const box = new THREE.Box3();
+      pivot.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !/^(Puerta|Plane)/.test(m.name)) return;
+        m.geometry.computeBoundingBox();
+        box.union(m.geometry.boundingBox!.clone().applyMatrix4(inv.clone().multiply(m.matrixWorld)));
+      });
+      const far = Math.abs(box.max.z) > Math.abs(box.min.z) ? box.max.z : box.min.z;
+      return { ...d, edge: new THREE.Vector3((box.min.x + box.max.x) / 2, 0, far) };
+    });
+  const edgeTmp = new THREE.Vector3();
+  const doorTmp = new THREE.Vector3();
+  /** Si quien usa esa puerta la necesita abierta ahora (bajando, subiendo o aún junto a ella). */
+  const doorNeeded = (side: 'Cond' | 'Acomp') => {
+    const who = side === 'Cond' ? driver : aitzi;
+    if (!who) return false;
+    const st = who.state;
+    if (st === 'exiting' || st === 'entering') return true;
+    const goingIn = side === 'Cond' ? driver?.boarding : st === 'boarding';
+    const d = doors.find((x) => x.side === side)!;
+    d.node!.getWorldPosition(doorTmp);
+    const dist = Math.hypot(who.root.position.x - doorTmp.x, who.root.position.z - doorTmp.z);
+    // al subir se abre al acercarse; al bajar se cierra cuando ya se ha apartado
+    return (goingIn && dist < 2.4) || (st === 'foot' && dist < 1.5 && stateJustLeft(side));
+  };
+  const leftAt: Record<string, number> = { Cond: -1, Acomp: -1 };
+  /** Durante unos segundos tras bajarse cuenta como "junto a la puerta". */
+  const stateJustLeft = (side: string) => leftAt[side]! >= 0 && clockT - leftAt[side]! < 6;
+  let clockT = 0;
+  const prevSt: Record<string, string> = { Cond: 'drive', Acomp: 'seated' };
+  for (const d of doors) {
+    d.btn.onclick = () => { d.manual = !d.manual; d.btn.blur(); };
+  }
+  function updateDoors(dt: number, onFoot: boolean) {
+    clockT += dt;
+    for (const d of doors) {
+      const who = d.side === 'Cond' ? driver : aitzi;
+      const st = who?.state ?? '';
+      if (prevSt[d.side] === 'exiting' && st === 'foot') leftAt[d.side] = clockT;
+      if (st === 'drive' || st === 'seated') { leftAt[d.side] = -1; d.manual = false; }
+      prevSt[d.side] = st;
+      const want = d.manual || doorNeeded(d.side) ? 1 : 0;
+      d.k = THREE.MathUtils.clamp(d.k + (want ? 1 / 0.55 : -1 / 0.8) * dt, 0, 1);
+      const e = d.k * d.k * (3 - 2 * d.k);
+      d.node!.quaternion.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, d.sign * DOOR_OPEN * e);
+      d.btn.hidden = !onFoot;
+      d.btn.classList.toggle('on', want === 1);
+    }
+    // puertas abiertas como obstáculo para los dos (a pie; al bajar/subir pasan por el hueco)
+    const segs: Segment[] = [];
+    for (const d of doors) {
+      if (d.k < 0.15) continue;
+      d.node!.updateWorldMatrix(true, false);
+      d.node!.getWorldPosition(doorTmp);
+      edgeTmp.copy(d.edge).applyMatrix4(d.node!.matrixWorld);
+      segs.push({ ax: doorTmp.x, az: doorTmp.z, bx: edgeTmp.x, bz: edgeTmp.z, r: 0.05 });
+    }
+    driver?.setSegments(segs);
+    aitzi?.setSegments(segs);
+  }
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__doors = doors;
+
   const onKey = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement | null)?.closest?.('input, textarea')) return;
-    if (driver && driver.state !== 'drive') return; // a pie, Espacio salta (lo gestiona el HUD del personaje)
+    if (driver && driver.state !== 'drive') {
+      // a pie, Espacio salta (lo gestiona el HUD del personaje); O/P abren las puertas
+      if (e.code === 'KeyO') doors.find((d) => d.side === 'Cond')?.btn.click();
+      if (e.code === 'KeyP') doors.find((d) => d.side === 'Acomp')?.btn.click();
+      return;
+    }
     if (e.code === 'Space') {
       e.preventDefault();
       playBtn.click();
@@ -636,6 +727,7 @@ export async function createCinematicMode(
       const wantFootCam = onFoot && !(ending === 'walking' && playing);
       if (wantFootCam !== footCam) setFootCam(wantFootCam);
       seek.disabled = onFoot;
+      updateDoors(dt, onFoot);
       camBtn.disabled = onFoot;
       if (footCam && driver) followDriver(dt);
       else if (cam === 'libre') controls.update();

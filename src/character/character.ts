@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { gunshotSound, clinkSound, resumeAudio } from './audio';
 import { buildHeightfield } from './terrain';
+import { measureBody, separate, pushFromSegment, roundRadius } from './body';
+import type { BodyCollider, BodyShape, Segment } from './body';
 import type { Heightfield } from './terrain';
 
 /**
@@ -436,6 +438,40 @@ export function createCharacter(opts: CharacterOptions) {
   let goal: { pos: THREE.Vector3; yaw: number | null; enter: boolean } | null = null;
   /** rumbo al que girar en el sitio al llegar (mirar al lago, por ejemplo) */
   let faceYaw: number | null = null;
+  /**
+   * Interacción con otro personaje (la acompañante la dirige desde fuera):
+   * a quién mira, si debe quedarse quieto, abrazo/manos por IK y obstáculos
+   * (cápsulas de otros cuerpos) que no puede atravesar al caminar.
+   */
+  const social = {
+    look: null as THREE.Vector3 | null,
+    engaged: false,
+    embrace: { w: 0, L: V(), R: V(), lean: 0, pole: 1 },
+    obstacles: [] as { c: BodyCollider; gap: number }[],
+    /** puertas abiertas de la camioneta */
+    segments: [] as Segment[],
+  };
+  /**
+   * Silueta del torso (elipse orientada), medida sobre la malla deformada al
+   * ponerse de pie; hasta entonces, una estimación.
+   */
+  let shape: BodyShape = { front: 0.16, back: 0.16, half: 0.3 };
+  let measured = false;
+  // caja de la camioneta en su propio marco: a pie no se atraviesa
+  const vBox = new THREE.Box3();
+  {
+    vehicle.updateWorldMatrix(true, true);
+    const inv = vehicle.matrixWorld.clone().invert();
+    vehicle.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.visible || Math.abs(m.matrixWorld.determinant()) < 1e-6) return;
+      m.geometry.computeBoundingBox();
+      vBox.union(m.geometry.boundingBox!.clone().applyMatrix4(inv.clone().multiply(m.matrixWorld)));
+    });
+    const halfW = Math.min(1.0, -vBox.min.x, vBox.max.x);
+    vBox.min.x = -halfW;
+    vBox.max.x = halfW;
+  }
 
   const allBones = Object.values(B);
   const LEG = { L: ['thighL', 'shinL', 'footL', 'toeL'].map((n) => B[n]!), R: ['thighR', 'shinR', 'footR', 'toeR'].map((n) => B[n]!) };
@@ -768,7 +804,7 @@ export function createCharacter(opts: CharacterOptions) {
 
     // --- intención de movimiento
     const mv = input.move.clone();
-    if (!foot || kneel.k > 0.02) mv.set(0, 0, 0);
+    if (!foot || kneel.k > 0.02 || social.engaged) mv.set(0, 0, 0);
     let targetSpeed = 0, wantHeading = heading;
     const armed = gun.state !== 'holstered';
     if (state === 'approach' && goal) {
@@ -819,6 +855,30 @@ export function createCharacter(opts: CharacterOptions) {
       if (speed > 0.001 && !jumping) {
         root.position.x += Math.sin(heading) * speed * dt;
         root.position.z += Math.cos(heading) * speed * dt;
+      }
+      // otros cuerpos (elipses orientadas) y la carrocería
+      for (const o of social.obstacles) {
+        const to = separate({ x: root.position.x, z: root.position.z, yaw: heading, shape }, o.c, o.gap);
+        if (to) { root.position.x = to.x; root.position.z = to.z; }
+      }
+      for (const sg of social.segments) {
+        const to = pushFromSegment(root.position.x, root.position.z, roundRadius(shape), sg);
+        if (to) { root.position.x = to.x; root.position.z = to.z; }
+      }
+      if (state === 'foot') {
+        const local = root.position.clone().applyMatrix4(vehicle.matrixWorld.clone().invert());
+        const R = shape.half * 0.8;
+        if (local.x > vBox.min.x - R && local.x < vBox.max.x + R && local.z > vBox.min.z - R && local.z < vBox.max.z + R) {
+          const push = [
+            [local.x - (vBox.min.x - R), -1, 0], [vBox.max.x + R - local.x, 1, 0],
+            [local.z - (vBox.min.z - R), 0, -1], [vBox.max.z + R - local.z, 0, 1],
+          ].sort((a, b) => a[0]! - b[0]!)[0]!;
+          local.x += push[1]! * push[0]!;
+          local.z += push[2]! * push[0]!;
+          const w = local.applyMatrix4(vehicle.matrixWorld);
+          root.position.x = w.x;
+          root.position.z = w.z;
+        }
       }
     } else {
       speed = 0;
@@ -988,6 +1048,21 @@ export function createCharacter(opts: CharacterOptions) {
       model.updateMatrixWorld(true);
     } else if (armed || !foot) waveT = -1;
 
+    // --- abrazo / manos sobre la otra persona (IK de brazos hacia puntos de su cuerpo)
+    const emb = social.embrace;
+    if (emb.w > 0.001 && foot && !armed) {
+      if (Math.abs(emb.lean) > 1e-4) premultiplyWorld(B.spine003!, qE(emb.lean * emb.w, 0, 0));
+      for (const [s, sg] of SIDES) {
+        if (s === 'R' && waveT >= 0) continue;
+        const arm = s === 'L' ? ARM_L : ARM_R;
+        const saved = snap(arm);
+        // codos hacia fuera y algo abajo: rodean el cuerpo en vez de atravesarlo
+        ik2(B[`upper_arm${s}`]!, B[`forearm${s}`]!, B[`hand${s}`]!, root.worldToLocal(emb[s].clone()), V(sg * emb.pole, -0.45, -0.15).normalize());
+        blendBack(arm, saved, Math.min(1, emb.w));
+      }
+      model.updateMatrixWorld(true);
+    }
+
     // --- IK de piernas: pedales (sentado), rodilla/salto, o desnivel del terreno (de pie)
     for (const [s] of SIDES) {
       const L = LEG[s];
@@ -1112,10 +1187,16 @@ export function createCharacter(opts: CharacterOptions) {
     }
     model.updateMatrixWorld(true);
 
+    // silueta real: se mide una vez de pie y quieto (brazos colgando)
+    if (!measured && state === 'foot' && stateT > 0.6 && speed < 0.05 && J.t < 0 && kneel.k === 0 && !armed && waveT < 0) {
+      shape = measureBody([skin], root, 0.85, 1.5, 5);
+      measured = true;
+    }
+
     // --- dedos
     {
       const holding = gun.state === 'raise' || gun.state === 'aim' || gun.state === 'lower' || (gun.state === 'reach' && gun.t > 0.3) || (gun.state === 'stow' && gun.t < 0.1);
-      const relaxed = 0.2 + 0.25 * ss(2, 4, speed) + (J.t >= 0 ? 0.1 : 0);
+      const relaxed = lerp(0.2 + 0.25 * ss(2, 4, speed) + (J.t >= 0 ? 0.1 : 0), 0.5, Math.min(1, social.embrace.w));
       const k = 1 - Math.exp(-dt * 16);
       hands.R.c += ((holding ? 1 : lerp(relaxed, 0.85, wheelW)) - hands.R.c) * k;
       hands.R.g += ((holding ? 1 : 0) - hands.R.g) * k;
@@ -1130,7 +1211,7 @@ export function createCharacter(opts: CharacterOptions) {
     let ty = 0, tp = 0;
     B.spine005!.getWorldPosition(headW);
     headW.y += 0.08;
-    const target = seated && state === 'drive' ? root.localToWorld(V(0, 1.5, 25)) : input.lookAt;
+    const target = seated && state === 'drive' ? root.localToWorld(V(0, 1.5, 25)) : foot && social.look ? social.look : input.lookAt;
     if (target) {
       tmp.copy(target).sub(headW).applyQuaternion(root.getWorldQuaternion(Q()).invert());
       const yawRaw = Math.atan2(tmp.x, tmp.z), pitchRaw = Math.atan2(-tmp.y, Math.hypot(tmp.x, tmp.z));
@@ -1218,6 +1299,29 @@ export function createCharacter(opts: CharacterOptions) {
     walkTo,
     /** Altura del suelo del parche de terreno (tras bajarse). */
     groundAt: (x: number, z: number) => groundY(x, z),
+    /** Posición de mundo de un hueso (para apoyar manos de otro personaje). */
+    anchor(name: string, out = V()) { return (B[name] ?? B.spine003!).getWorldPosition(out); },
+    /** Mirar a un punto (o null para volver al cursor) y quedarse quieto mientras dura una interacción. */
+    setSocial(o: { look?: THREE.Vector3 | null; engaged?: boolean }) {
+      if (o.look !== undefined) social.look = o.look ? o.look.clone() : null;
+      if (o.engaged !== undefined) social.engaged = o.engaged;
+    },
+    /** Girar en el sitio hasta `yaw` (solo a pie y parado). */
+    face(yaw: number) { if (state === 'foot') faceYaw = yaw; },
+    /** Brazos por IK hacia L/R (mundo) con peso `w`; `lean` inclina el pecho hacia delante; `pole` abre los codos. */
+    setEmbrace(w: number, L?: THREE.Vector3, R?: THREE.Vector3, lean = 0, pole = 1) {
+      social.embrace.w = w;
+      if (L) social.embrace.L.copy(L);
+      if (R) social.embrace.R.copy(R);
+      social.embrace.lean = lean;
+      social.embrace.pole = pole;
+    },
+    /** Cápsulas (círculos en el plano) que no puede atravesar al caminar. */
+    setObstacles(list: { c: BodyCollider; gap: number }[]) { social.obstacles = list; },
+    /** Puertas abiertas (segmentos en planta) que no puede atravesar a pie. */
+    setSegments(list: Segment[]) { social.segments = list; },
+    /** Su silueta para colisiones (elipse orientada con su rumbo). */
+    body(): BodyCollider { return { x: root.position.x, z: root.position.z, yaw: heading, shape }; },
     startJump,
     toggleKneel,
     toggleGun,
