@@ -1,10 +1,11 @@
 :root {
   --bg: #0e1116;
-  --panel: rgba(14, 17, 22, 0.78);
+  --panel: rgba(14, 17, 22, 0.82);
   --fg: #e8ecf1;
   --muted: #9aa4b2;
   --accent: #d9483b;
   --line: #2c3440;
+  --gap: 12px;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color-scheme: dark;
 }
@@ -25,11 +26,39 @@ body {
 #viewport { position: absolute; inset: 0; }
 #viewport canvas { display: block; }
 
-/* ---- pestañas de modo */
+/* ══════════════════════════════════════════════════════════════════
+   Capa de interfaz: rejilla de tres filas sobre la escena.
+
+   Antes cada panel se anclaba por su cuenta con `position: fixed` a una
+   esquina, así que en cuanto la ventana se estrechaba se solapaban entre
+   ellos y las pestañas se salían de la pantalla. Ahora el navegador reparte
+   el espacio: barra superior arriba, paneles en el medio, HUD abajo. Las
+   filas no pueden pisarse porque son celdas de la misma rejilla.
+   ══════════════════════════════════════════════════════════════════ */
+#ui {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--gap);
+  padding: var(--gap) max(var(--gap), env(safe-area-inset-right)) max(var(--gap), env(safe-area-inset-bottom)) max(var(--gap), env(safe-area-inset-left));
+  padding-top: max(var(--gap), env(safe-area-inset-top));
+  /* la capa deja pasar el ratón a la escena; solo los controles lo capturan */
+  pointer-events: none;
+  z-index: 3;
+}
+
+#ui > * { min-width: 0; min-height: 0; }
+
+/* ---- barra superior: pestañas + stats + plegar */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 #tabs {
-  position: fixed;
-  top: 12px;
-  left: 16px;
   display: flex;
   gap: 6px;
   background: var(--panel);
@@ -37,7 +66,13 @@ body {
   padding: 4px;
   border-radius: 10px;
   border: 1px solid var(--line);
+  pointer-events: auto;
+  /* en pantallas estrechas las pestañas se deslizan en vez de desbordar */
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: 100%;
 }
+#tabs::-webkit-scrollbar { display: none; }
 
 .tab {
   background: transparent;
@@ -47,19 +82,74 @@ body {
   padding: 6px 14px;
   cursor: pointer;
   font: inherit;
+  white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
 
 .tab:hover { color: var(--fg); }
 .tab.on { background: var(--accent); color: #fff; }
 
+#stats {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: auto;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+#uiToggle[hidden] { display: none; }
+#uiToggle { pointer-events: auto; flex: none; display: flex; align-items: center; gap: 6px; }
+#uiToggle .ico { font-size: 11px; opacity: 0.7; }
+
+/* ---- paneles laterales */
+#docks {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+.dock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(320px, 38vw);
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  pointer-events: auto;
+}
+.dock:empty { display: none; }
+#dockRight { margin-left: auto; }
+
+.panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+/* plegado: solo quedan las pestañas y el HUD, la escena se ve entera */
+#ui.min #docks,
+#ui.min #charStick { display: none; }
+
+/* ---- capa libre (bocadillos, joystick): se posiciona a mano sobre la escena */
+#layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#layer > * { pointer-events: auto; }
+
 /* ---- HUD inferior */
 #hud {
-  position: fixed;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
   background: var(--panel);
@@ -67,6 +157,7 @@ body {
   padding: 10px 14px;
   border-radius: 12px;
   border: 1px solid var(--line);
+  pointer-events: auto;
 }
 
 #hud:empty { display: none; }
@@ -86,7 +177,7 @@ body {
 .btn.on { background: var(--accent); border-color: var(--accent); }
 
 #seek {
-  flex: 1;
+  flex: 1 1 140px;
   accent-color: var(--accent);
   min-width: 80px;
 }
@@ -99,19 +190,9 @@ body {
   white-space: nowrap;
 }
 
-#stats {
-  position: fixed;
-  top: 14px;
-  right: 16px;
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
 /* ---- pantalla de carga */
 #loading {
-  position: fixed;
+  position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
@@ -137,26 +218,24 @@ body {
   transition: width 0.2s;
 }
 
-@media (max-width: 560px) {
-  #hud { flex-wrap: wrap; }
-  #seek { order: 5; flex-basis: 100%; }
+/* ---- contenido de los paneles de personaje */
+.panel .who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; min-width: 0; }
+.panel .who b { color: #e98aa0; }
+.panel .now,
+.panel .hint {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.panel kbd { font: 11px ui-monospace, monospace; opacity: 0.6; margin-left: 2px; }
+.panel .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.panel .acts[hidden] { display: none; }
+.panel .btn[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); }
 
-/* ---- personaje (modo Cinemática) */
-#charPanel {
-  position: fixed;
-  top: 40px;
-  right: 16px;
-  width: min(340px, calc(100vw - 32px));
-  display: grid;
-  gap: 8px;
-  padding: 8px;
-  background: var(--panel);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  z-index: 2;
-}
+#charPanel .who b { color: #8ab4e9; }
 #charPanel .say { display: flex; gap: 6px; }
 #charPanel input[type='text'] {
   flex: 1;
@@ -169,12 +248,7 @@ body {
   font: inherit;
 }
 #charPanel input[type='text']:focus { outline: none; border-color: var(--accent); }
-#charPanel .acts { display: flex; flex-wrap: wrap; gap: 6px; }
-#charPanel .acts[hidden] { display: none; }
-#charPanel .btn[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); }
-#charPanel kbd { font: 11px ui-monospace, monospace; opacity: 0.6; margin-left: 2px; }
-#charPanel .hint { margin: 0; font-size: 12px; color: var(--muted); }
-#charPanel .vrow { display: flex; gap: 6px; align-items: center; }
+#charPanel .vrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 #charPanel .vstatus { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #charPanel .rec { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-right: 6px; }
 #charPanel [aria-pressed='true'] .rec { animation: charBlink 1s infinite; }
@@ -188,8 +262,13 @@ body {
 #charPanel .clips .cd { font: 11px ui-monospace, monospace; color: var(--muted); }
 #charPanel .clips .btn { padding: 4px 8px; font-size: 12px; }
 
+/* Aitziber solo puede gesticular cuando está a pie */
+#aitziPanel .acts { display: none; }
+#aitziPanel.foot .acts { display: flex; }
+
+/* ---- bocadillo y joystick (capa libre) */
 #charBubble {
-  position: fixed;
+  position: absolute;
   left: 0;
   top: 0;
   max-width: min(320px, 70vw);
@@ -201,21 +280,20 @@ body {
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.2s;
-  z-index: 2;
 }
 #charBubble.on { opacity: 1; }
 
 #charStick {
-  position: fixed;
-  left: 24px;
-  bottom: 96px;
-  width: 110px;
-  height: 110px;
+  position: absolute;
+  left: max(16px, env(safe-area-inset-left));
+  /* por encima del HUD, que cambia de alto al envolverse en móvil */
+  bottom: calc(var(--hud-h, 60px) + 28px);
+  width: 108px;
+  height: 108px;
   border-radius: 50%;
   background: var(--panel);
   border: 1px solid var(--line);
   touch-action: none;
-  z-index: 2;
 }
 #charStick[hidden] { display: none; }
 #charStick i {
@@ -230,29 +308,49 @@ body {
   opacity: 0.85;
 }
 
-@media (max-width: 560px) {
-  #charPanel { top: auto; bottom: 120px; }
+/* ══════════════════════════════════════════════════════════════════
+   Pantallas estrechas: los paneles pasan a una sola columna a la derecha
+   y se limitan en alto, para que no tapen la camioneta ni se pisen.
+   ══════════════════════════════════════════════════════════════════ */
+@media (max-width: 760px) {
+  :root { --gap: 8px; }
+  #ui { grid-template-rows: auto minmax(0, 1fr) auto; }
+  /* todo en una sola fila: en móvil el alto es el recurso escaso */
+  #tabs { flex: 1 1 auto; }
+  #stats { font-size: 10px; margin-left: 0; flex: none; }
+  #uiToggle { padding: 6px 10px; }
+  #uiToggle .lbl { display: none; }
+  #uiToggle .ico { font-size: 14px; }
+  #docks { flex-direction: column; align-items: stretch; overflow-y: auto; }
+  .dock { width: auto; max-height: none; overflow: visible; }
+  /* el conductor primero: es el panel con el que más se interactúa */
+  #dockRight { order: -1; margin-left: 0; }
+  #charPanel .clips { max-height: 92px; }
+  .time { min-width: 0; }
+  #charStick { width: 92px; height: 92px; }
+  #charStick i { width: 38px; height: 38px; margin: -19px 0 0 -19px; }
 }
 
-/* ---- Aitziber, la acompañante (Cinemática three.js) */
-#aitziPanel {
-  position: fixed;
-  top: 56px;
-  left: 16px;
-  width: min(300px, calc(100vw - 32px));
-  display: grid;
-  gap: 6px;
-  padding: 8px;
-  background: var(--panel);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  z-index: 2;
+/* Pantallas muy estrechas: las stats son diagnóstico, no control */
+@media (max-width: 420px) {
+  #stats { display: none; }
 }
-#aitziPanel .who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
-#aitziPanel .who b { color: #e98aa0; }
-#aitziPanel .now { color: var(--muted); font-size: 12px; }
-#aitziPanel .acts { display: none; flex-wrap: wrap; gap: 6px; }
-#aitziPanel.foot .acts { display: flex; }
-#aitziPanel kbd { font: 11px ui-monospace, monospace; opacity: 0.6; margin-left: 2px; }
-@media (max-width: 560px) { #aitziPanel { top: auto; bottom: 120px; } }
+
+/* HUD compacto cuando el ancho aprieta: sin atajos de teclado (no hay teclado
+   en táctil) y con botones más pequeños, para que quepa en una o dos filas. */
+@media (max-width: 900px), (max-height: 460px) {
+  #hud { padding: 8px 10px; gap: 8px; font-size: 13px; }
+  #hud .btn { padding: 5px 9px; }
+  #hud kbd { display: none; }
+}
+
+/* Móvil en horizontal: casi no hay alto. Los paneles van en columna estrecha
+   a la derecha y el HUD se queda en una sola línea. */
+@media (max-height: 460px) and (orientation: landscape) {
+  #docks { flex-direction: row; }
+  .dock { width: min(280px, 34vw); max-height: 100%; overflow-y: auto; }
+  #dockRight { order: 0; margin-left: auto; }
+  #charPanel .clips { max-height: 64px; }
+  #charStick { bottom: calc(var(--hud-h, 56px) + 12px); width: 84px; height: 84px; }
+  #charStick i { width: 34px; height: 34px; margin: -17px 0 0 -17px; }
+}

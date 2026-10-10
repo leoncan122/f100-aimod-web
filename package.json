@@ -12,6 +12,7 @@
     "smoke": "node scripts/smoke.mjs",
     "test:grounding": "node scripts/test-grounding.mjs",
     "smoke:one": "node scripts/smoke-one.mjs",
+    "test:ui": "node scripts/capture-ui.mjs",
     "models:optimize": "node scripts/optimize-models.mjs",
     "models:verify": "node scripts/verify-models.mjs"
   },

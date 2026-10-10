@@ -690,6 +690,7 @@ export function createCompanion(opts: CompanionOptions) {
   // ── panel de gestos
   const panel = document.createElement('div');
   panel.id = 'aitziPanel';
+  panel.className = 'panel';
   panel.innerHTML = `
     <div class="who"><b>Aitziber</b><span class="now"></span></div>
     <div class="acts">

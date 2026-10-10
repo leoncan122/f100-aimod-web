@@ -12,12 +12,15 @@ import { createCompanion } from '../character/companion';
 import type { Companion } from '../character/companion';
 import type { Segment } from '../character/body';
 import type { CameraTrack, ViewerMode } from '../types';
+import type { Overlay } from '../ui/overlay';
 
 export interface CinematicDeps {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   scene: THREE.Scene;
   hud: HTMLElement;
+  /** Regiones de la interfaz: docks laterales y capa libre sobre la escena. */
+  ui: Overlay;
   onProgress: (pct: number, label: string) => void;
 }
 
@@ -39,7 +42,7 @@ export async function createCinematicMode(
   deps: CinematicDeps,
   opts: CinematicOptions = { landscape: 'blender' },
 ): Promise<ViewerMode> {
-  const { renderer, camera, scene, hud, onProgress } = deps;
+  const { renderer, camera, scene, hud, ui, onProgress } = deps;
   const procedural = opts.landscape === 'three';
 
   // Con paisaje procedural (Lambert, sin IBL en el suelo) el sol quemaba los
@@ -436,12 +439,18 @@ export async function createCinematicMode(
       body,
       groundMeshes,
       driver,
-      host: hud.parentElement ?? document.body,
+      host: ui.dockLeft,
     });
     if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__aitzi = aitzi;
   }
   if (driver) {
-    charHud = createCharacterHud({ host: hud.parentElement ?? document.body, canvas: renderer.domElement, character: driver, onBoard: board });
+    charHud = createCharacterHud({
+      host: ui.dockRight,
+      layer: ui.layer,
+      canvas: renderer.domElement,
+      character: driver,
+      onBoard: board,
+    });
   }
   // Solo en dev: los scripts de test leen el estado del conductor y paran el tiempo sin que se baje.
   if (import.meta.env.DEV) {

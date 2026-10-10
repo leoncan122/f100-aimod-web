@@ -4,24 +4,25 @@ import { createOrbitMode } from './modes/orbit';
 import { createDesertMode } from './modes/desert';
 import { DEFAULT_MODE, isModeId } from './types';
 import type { ModeId, ViewerMode } from './types';
+import { createOverlay } from './ui/overlay';
 
 export function createApp(root: HTMLElement) {
   root.innerHTML = `
     <div id="viewport"></div>
-    <div id="tabs">
-      <button class="tab on" data-mode="cinematic">Cinemática</button>
-      <button class="tab" data-mode="cinematic-three">Cinemática three.js</button>
-      <button class="tab" data-mode="orbit">Modelo</button>
-      <button class="tab" data-mode="desert">Desierto</button>
-    </div>
-    <div id="stats"></div>
-    <div id="hud"></div>
     <div id="loading"><div class="box"><div id="msg">Iniciando…</div><div id="bar"><div></div></div></div></div>
   `;
 
   const viewport = root.querySelector<HTMLDivElement>('#viewport')!;
-  const hud = root.querySelector<HTMLDivElement>('#hud')!;
-  const statsEl = root.querySelector<HTMLDivElement>('#stats')!;
+  // Toda la interfaz vive en una rejilla propia: así los controles de cada modo
+  // se reparten el espacio en vez de solaparse flotando sobre las esquinas.
+  const ui = createOverlay(root);
+  ui.tabs.innerHTML = `
+    <button class="tab on" data-mode="cinematic">Cinemática</button>
+    <button class="tab" data-mode="cinematic-three">Cinemática three.js</button>
+    <button class="tab" data-mode="orbit">Modelo</button>
+    <button class="tab" data-mode="desert">Desierto</button>
+  `;
+  const statsEl = ui.stats;
   const loading = root.querySelector<HTMLDivElement>('#loading')!;
   const msg = root.querySelector<HTMLDivElement>('#msg')!;
   const bar = root.querySelector<HTMLDivElement>('#bar > div')!;
@@ -57,6 +58,7 @@ export function createApp(root: HTMLElement) {
 
     mode?.dispose();
     mode = null;
+    ui.clear();
     scene = new THREE.Scene();
     // Solo en dev: permite a los scripts de test medir la escena viva.
     if (import.meta.env.DEV) {
@@ -70,7 +72,7 @@ export function createApp(root: HTMLElement) {
       };
     }
 
-    const deps = { renderer, camera, scene, hud, onProgress };
+    const deps = { renderer, camera, scene, hud: ui.hud, ui, onProgress };
     try {
       // Mapa explicito: antes era un ternario sin rama por defecto real, asi que
       // cualquier id desconocido caia silenciosamente en el desierto.

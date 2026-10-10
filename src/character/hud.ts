@@ -9,7 +9,10 @@ import type { Character, CharState } from './character';
  * que no choca con los atajos de la cinemática (Espacio, C) mientras conduce.
  */
 export interface CharacterHudOptions {
+  /** Dock donde va el panel de controles (lo coloca la rejilla, no `fixed`). */
   host: HTMLElement;
+  /** Capa libre sobre la escena para el bocadillo y el joystick. */
+  layer: HTMLElement;
   canvas: HTMLCanvasElement;
   character: Character;
   /** Volver a la camioneta (arranca la película al sentarse). */
@@ -21,11 +24,13 @@ const MOVE_KEYS: Record<string, 'f' | 'b' | 'l' | 'r'> = {
 };
 
 export function createCharacterHud(opts: CharacterHudOptions) {
-  const { host, canvas, character: ch } = opts;
+  const { host, layer, canvas, character: ch } = opts;
 
   const panel = document.createElement('div');
   panel.id = 'charPanel';
+  panel.className = 'panel';
   panel.innerHTML = `
+    <div class="who"><b>Conductor</b><span class="hint" data-a="hint">Pausa para que se baje de la camioneta</span></div>
     <form class="say" autocomplete="off">
       <input type="text" maxlength="160" placeholder="Escribe lo que dirá…" aria-label="Texto que dirá el conductor">
       <button type="submit" class="btn">Hablar</button>
@@ -38,25 +43,24 @@ export function createCharacterHud(opts: CharacterHudOptions) {
       <button type="button" class="btn" data-a="fire">Disparar <kbd>F</kbd></button>
       <button type="button" class="btn" data-a="wave">Saludar</button>
       <button type="button" class="btn on" data-a="board">Subir <kbd>E</kbd></button>
-    </div>
-    <p class="hint" data-a="hint">Pausa para que se baje de la camioneta</p>`;
+    </div>`;
   host.appendChild(panel);
 
   const bubble = document.createElement('div');
   bubble.id = 'charBubble';
-  host.appendChild(bubble);
+  layer.appendChild(bubble);
 
   const stick = document.createElement('div');
   stick.id = 'charStick';
   stick.hidden = true;
   stick.innerHTML = '<i></i>';
-  host.appendChild(stick);
+  layer.appendChild(stick);
   const knob = stick.querySelector('i')!;
 
   const form = panel.querySelector<HTMLFormElement>('.say')!;
   const text = form.querySelector('input')!;
   const acts = panel.querySelector<HTMLDivElement>('.acts')!;
-  const hint = panel.querySelector<HTMLParagraphElement>('[data-a="hint"]')!;
+  const hint = panel.querySelector<HTMLElement>('[data-a="hint"]')!;
   const btn = (a: string) => panel.querySelector<HTMLButtonElement>(`[data-a="${a}"]`)!;
 
   form.onsubmit = (e) => {
