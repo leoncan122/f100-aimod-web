@@ -439,13 +439,13 @@ export async function createCinematicMode(
       body,
       groundMeshes,
       driver,
-      host: ui.dockLeft,
+      layer: ui.layer,
+      canvas: renderer.domElement,
     });
     if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__aitzi = aitzi;
   }
   if (driver) {
     charHud = createCharacterHud({
-      host: ui.dockRight,
       layer: ui.layer,
       canvas: renderer.domElement,
       character: driver,
@@ -764,6 +764,9 @@ export async function createCinematicMode(
         camera.position.y += (Math.random() - 0.5) * k;
       }
       charHud?.update(camera);
+      // Las acciones de Aitziber se colocan con la camara ya en su pose final,
+      // para que no vayan un frame por detras de ella.
+      aitzi?.updateUi(camera);
       land?.update(camera);
 
       seek.value = String(t / duration);

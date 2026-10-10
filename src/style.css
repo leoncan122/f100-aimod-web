@@ -218,26 +218,204 @@ body {
   transition: width 0.2s;
 }
 
-/* ---- contenido de los paneles de personaje */
-.panel .who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; min-width: 0; }
-.panel .who b { color: #e98aa0; }
-.panel .now,
-.panel .hint {
-  color: var(--muted);
-  font-size: 12px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.panel kbd { font: 11px ui-monospace, monospace; opacity: 0.6; margin-left: 2px; }
-.panel .acts { display: flex; flex-wrap: wrap; gap: 6px; }
-.panel .acts[hidden] { display: none; }
-.panel .btn[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); }
+/* ══════════════════════════════════════════════════════════════════
+   Acciones ancladas a los personajes (src/ui/action-menu.ts).
 
-#charPanel .who b { color: #8ab4e9; }
-#charPanel .say { display: flex; gap: 6px; }
-#charPanel input[type='text'] {
+   Nada de paneles fijos: los controles aparecen sobre el personaje al
+   pulsarlo, en abanico, cada acción con su icono. Con teclado el icono
+   parpadea solo sobre él, para que se vea qué acción se ha disparado sin
+   tener que abrir el menú.
+   ══════════════════════════════════════════════════════════════════ */
+.actionMenu {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s;
+  /* por encima del bocadillo pero bajo la tarjeta de habla */
+  z-index: 2;
+}
+.actionMenu.on { opacity: 1; }
+
+/* ---- anillo: la pista de que el personaje es pulsable */
+.amRing {
+  position: absolute;
+  left: -19px;
+  top: -19px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(232, 236, 241, 0.5);
+  background: rgba(14, 17, 22, 0.45);
+  backdrop-filter: blur(3px);
+  color: var(--fg);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  opacity: 0;
+  transform: scale(0.75);
+  transition: opacity 0.18s, transform 0.18s, border-color 0.18s;
+}
+/* visible al pasar el ratón por encima del personaje, o siempre en táctil
+   (donde no hay hover y sin pista no hay forma de descubrirlo) */
+.actionMenu.near .amRing,
+.actionMenu.open .amRing { opacity: 1; transform: scale(1); }
+@media (pointer: coarse) {
+  .actionMenu.on .amRing { opacity: 0.9; transform: scale(1); }
+}
+.amRing:hover { border-color: var(--accent); }
+.actionMenu.open .amRing { border-color: var(--accent); background: var(--accent); }
+
+.amDots { display: flex; gap: 3px; }
+.amDots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.actionMenu.open .amDots { transform: rotate(90deg); transition: transform 0.2s; }
+
+/* ---- abanico de acciones */
+.amFan { position: absolute; left: 0; top: 0; }
+
+.amBtn {
+  position: absolute;
+  left: -22px;
+  top: -22px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: rgba(16, 20, 26, 0.9);
+  backdrop-filter: blur(6px);
+  color: var(--fg);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  opacity: 0;
+  /* cerrado: todos apilados en el centro; abierto: cada uno a su ángulo */
+  transform: translate(0, 0) scale(0.4);
+  transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.16s, background 0.15s, border-color 0.15s;
+}
+.actionMenu.open .amBtn {
+  pointer-events: auto;
+  opacity: 1;
+  transform: translate(var(--x, 0), var(--y, 0)) scale(1);
+  transition-delay: var(--d, 0ms);
+}
+.amBtn[hidden] { display: none; }
+.amBtn:hover { border-color: var(--accent); background: rgba(26, 32, 40, 0.95); }
+.amBtn.on { background: var(--accent); border-color: var(--accent); }
+.amBtn .icon { width: 22px; height: 22px; }
+
+/* tecla asociada, en la esquina del icono (solo con teclado disponible) */
+.amKey {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #11161d;
+  border: 1px solid var(--line);
+  font: 10px/13px ui-monospace, monospace;
+  color: var(--muted);
+}
+@media (pointer: coarse) { .amKey { display: none; } }
+
+/* ---- parpadeo al disparar una acción (clic o tecla) */
+@keyframes amFlash {
+  0% { transform: translate(var(--x, 0), var(--y, 0)) scale(1); box-shadow: 0 0 0 0 rgba(217, 72, 59, 0.75); }
+  45% { transform: translate(var(--x, 0), var(--y, 0)) scale(1.22); box-shadow: 0 0 0 10px rgba(217, 72, 59, 0); }
+  100% { transform: translate(var(--x, 0), var(--y, 0)) scale(1); box-shadow: 0 0 0 0 rgba(217, 72, 59, 0); }
+}
+.actionMenu.open .amBtn.flash { animation: amFlash 0.5s ease-out; }
+
+/* Con el menú cerrado el icono se muestra solo, centrado sobre la cabeza: es
+   la confirmación visual de un atajo de teclado. */
+@keyframes amSolo {
+  0% { opacity: 0.85; transform: translate(0, -62px) scale(0.72); }
+  18% { opacity: 1; transform: translate(0, -80px) scale(1.14); }
+  70% { opacity: 1; transform: translate(0, -84px) scale(1); }
+  100% { opacity: 0; transform: translate(0, -98px) scale(0.92); }
+}
+.amBtn.solo {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: amSolo 0.9s ease-out forwards;
+}
+.amBtn.solo .amKey { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .amBtn, .amRing { transition: opacity 0.15s; }
+  .actionMenu.open .amBtn { transform: translate(var(--x, 0), var(--y, 0)); }
+  .actionMenu.open .amBtn.flash { animation: none; outline: 2px solid var(--accent); }
+  .amBtn.solo { animation: none; transform: translate(0, -80px); }
+}
+
+/* ---- etiqueta del nombre de la acción */
+.amTip {
+  position: absolute;
+  left: 0;
+  top: 18px;
+  transform: translateX(-50%);
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: rgba(10, 13, 18, 0.92);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.amTip.on { opacity: 1; }
+
+/* ---- tarjeta de habla y voz (se despliega desde el icono del bocadillo) */
+.sayCard {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* anclada bajo el personaje, centrada en él */
+  margin: 34px 0 0 0;
+  width: min(300px, calc(100vw - 24px));
+  translate: -50% 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  pointer-events: auto;
+  z-index: 3;
+}
+.sayCard[hidden] { display: none; }
+/* si el personaje queda detrás de la cámara, la tarjeta no debe flotar sola */
+.sayCard.offscreen { visibility: hidden; }
+.sayHead { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.sayHead b { color: #8ab4e9; }
+.sayX {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sayX:hover { color: var(--fg); background: #1d232c; }
+.sayX .icon { width: 16px; height: 16px; }
+.sayHint { margin: 0; font-size: 12px; color: var(--muted); }
+.sayCard .say { display: flex; gap: 6px; }
+.sayCard input[type='text'] {
   flex: 1;
   min-width: 0;
   background: #161b22;
@@ -247,24 +425,20 @@ body {
   padding: 6px 10px;
   font: inherit;
 }
-#charPanel input[type='text']:focus { outline: none; border-color: var(--accent); }
-#charPanel .vrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-#charPanel .vstatus { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#charPanel .rec { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-right: 6px; }
-#charPanel [aria-pressed='true'] .rec { animation: charBlink 1s infinite; }
+.sayCard input[type='text']:focus { outline: none; border-color: var(--accent); }
+.sayCard .vrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sayCard .vstatus { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sayCard .rec { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-right: 6px; }
+.sayCard [aria-pressed='true'] .rec { animation: charBlink 1s infinite; }
 @keyframes charBlink { 50% { opacity: 0.25; } }
-@media (prefers-reduced-motion: reduce) { #charPanel [aria-pressed='true'] .rec { animation: none; } }
-#charPanel .clips { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 120px; overflow-y: auto; }
-#charPanel .clips:empty { display: none; }
-#charPanel .clips li { display: flex; align-items: center; gap: 6px; padding: 2px 2px 2px 8px; border-radius: 6px; min-width: 0; }
-#charPanel .clips li.playing { background: #1d232c; }
-#charPanel .clips .cn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#charPanel .clips .cd { font: 11px ui-monospace, monospace; color: var(--muted); }
-#charPanel .clips .btn { padding: 4px 8px; font-size: 12px; }
-
-/* Aitziber solo puede gesticular cuando está a pie */
-#aitziPanel .acts { display: none; }
-#aitziPanel.foot .acts { display: flex; }
+@media (prefers-reduced-motion: reduce) { .sayCard [aria-pressed='true'] .rec { animation: none; } }
+.sayCard .clips { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 108px; overflow-y: auto; }
+.sayCard .clips:empty { display: none; }
+.sayCard .clips li { display: flex; align-items: center; gap: 6px; padding: 2px 2px 2px 8px; border-radius: 6px; min-width: 0; }
+.sayCard .clips li.playing { background: #1d232c; }
+.sayCard .clips .cn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sayCard .clips .cd { font: 11px ui-monospace, monospace; color: var(--muted); }
+.sayCard .clips .btn { padding: 4px 8px; font-size: 12px; }
 
 /* ---- bocadillo y joystick (capa libre) */
 #charBubble {

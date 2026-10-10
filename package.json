@@ -13,6 +13,7 @@
     "test:grounding": "node scripts/test-grounding.mjs",
     "smoke:one": "node scripts/smoke-one.mjs",
     "test:ui": "node scripts/capture-ui.mjs",
+    "test:acciones": "node scripts/test-acciones.mjs",
     "test:modes": "node scripts/test-visible-modes.mjs",
     "models:optimize": "node scripts/optimize-models.mjs",
     "models:verify": "node scripts/verify-models.mjs"

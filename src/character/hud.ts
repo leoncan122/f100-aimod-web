@@ -1,17 +1,27 @@
+/**
+ * Controles del conductor, anclados a él en la escena.
+ *
+ * La pantalla queda limpia: no hay panel fijo. Al pulsar sobre el conductor
+ * salen sus acciones en abanico sobre la cabeza, cada una con su icono. En
+ * escritorio las teclas funcionan siempre, sin abrir nada ni apuntarle: al
+ * pulsarlas el icono de esa acción parpadea sobre él, así se ve qué se activó.
+ *
+ * Hablar y la voz (grabar, subir, audios guardados) viven en una tarjeta que
+ * se despliega desde el icono del bocadillo, porque necesitan un campo de texto
+ * y una lista: no caben en un icono.
+ *
+ * El teclado de movimiento solo actúa a pie, así que no choca con los atajos de
+ * la cinemática (Espacio, C) mientras conduce.
+ */
 import * as THREE from 'three';
 import { createVoicePanel } from './voice';
 import { resumeAudio } from './audio';
+import { createActionMenu } from '../ui/action-menu';
+import { icon } from '../ui/icons';
 import type { Character, CharState } from './character';
 
-/**
- * Controles del personaje en la cinemática: habla y voz (siempre), acciones a pie,
- * bocadillo sobre la cabeza y joystick táctil. El teclado solo actúa a pie, así
- * que no choca con los atajos de la cinemática (Espacio, C) mientras conduce.
- */
 export interface CharacterHudOptions {
-  /** Dock donde va el panel de controles (lo coloca la rejilla, no `fixed`). */
-  host: HTMLElement;
-  /** Capa libre sobre la escena para el bocadillo y el joystick. */
+  /** Capa libre de la interfaz: todo va anclado a la escena, no a una esquina. */
   layer: HTMLElement;
   canvas: HTMLCanvasElement;
   character: Character;
@@ -24,44 +34,35 @@ const MOVE_KEYS: Record<string, 'f' | 'b' | 'l' | 'r'> = {
 };
 
 export function createCharacterHud(opts: CharacterHudOptions) {
-  const { host, layer, canvas, character: ch } = opts;
+  const { layer, canvas, character: ch } = opts;
+  const onFoot = () => ch.state === 'foot';
 
-  const panel = document.createElement('div');
-  panel.id = 'charPanel';
-  panel.className = 'panel';
-  panel.innerHTML = `
-    <div class="who"><b>Conductor</b><span class="hint" data-a="hint">Pausa para que se baje de la camioneta</span></div>
+  // ── tarjeta de habla y voz (se abre desde el icono del bocadillo)
+  const card = document.createElement('div');
+  card.className = 'sayCard';
+  card.hidden = true;
+  card.innerHTML = `
+    <div class="sayHead">
+      <b>Conductor</b>
+      <button type="button" class="sayX" aria-label="Cerrar">${icon('close')}</button>
+    </div>
     <form class="say" autocomplete="off">
       <input type="text" maxlength="160" placeholder="Escribe lo que dirá…" aria-label="Texto que dirá el conductor">
       <button type="submit" class="btn">Hablar</button>
     </form>
     <div class="voice"></div>
-    <div class="acts" hidden>
-      <button type="button" class="btn" data-a="jump">Saltar <kbd>␣</kbd></button>
-      <button type="button" class="btn" data-a="kneel" aria-pressed="false">Rodilla <kbd>K</kbd></button>
-      <button type="button" class="btn" data-a="gun" aria-pressed="false">Arma <kbd>G</kbd></button>
-      <button type="button" class="btn" data-a="fire">Disparar <kbd>F</kbd></button>
-      <button type="button" class="btn" data-a="wave">Saludar</button>
-      <button type="button" class="btn on" data-a="board">Subir <kbd>E</kbd></button>
-    </div>`;
-  host.appendChild(panel);
+    <p class="sayHint"></p>`;
+  layer.appendChild(card);
 
-  const bubble = document.createElement('div');
-  bubble.id = 'charBubble';
-  layer.appendChild(bubble);
-
-  const stick = document.createElement('div');
-  stick.id = 'charStick';
-  stick.hidden = true;
-  stick.innerHTML = '<i></i>';
-  layer.appendChild(stick);
-  const knob = stick.querySelector('i')!;
-
-  const form = panel.querySelector<HTMLFormElement>('.say')!;
+  const form = card.querySelector<HTMLFormElement>('.say')!;
   const text = form.querySelector('input')!;
-  const acts = panel.querySelector<HTMLDivElement>('.acts')!;
-  const hint = panel.querySelector<HTMLElement>('[data-a="hint"]')!;
-  const btn = (a: string) => panel.querySelector<HTMLButtonElement>(`[data-a="${a}"]`)!;
+  const hint = card.querySelector<HTMLParagraphElement>('.sayHint')!;
+
+  const setCard = (v: boolean) => {
+    card.hidden = !v;
+    if (v) text.focus();
+  };
+  card.querySelector<HTMLButtonElement>('.sayX')!.onclick = () => setCard(false);
 
   form.onsubmit = (e) => {
     e.preventDefault();
@@ -70,36 +71,58 @@ export function createCharacterHud(opts: CharacterHudOptions) {
     text.value = '';
     text.blur();
   };
-  const voice = createVoicePanel(panel.querySelector<HTMLDivElement>('.voice')!, (s) => {
+  const voice = createVoicePanel(card.querySelector<HTMLDivElement>('.voice')!, (s) => {
     ch.stopSpeech();
     say('(tu voz)', s * 1000 + 400);
   });
   ch.setVoice(() => voice.shape(), () => voice.onset());
 
-  btn('jump').onclick = () => ch.startJump();
-  btn('kneel').onclick = () => ch.toggleKneel();
-  btn('gun').onclick = () => ch.toggleGun();
-  btn('fire').onclick = () => ch.fire();
-  btn('wave').onclick = () => ch.wave();
-  btn('board').onclick = () => opts.onBoard();
+  // ── menú de acciones sobre el conductor
+  const headTmp = new THREE.Vector3();
+  const menu = createActionMenu({
+    layer,
+    canvas,
+    title: 'el conductor',
+    // solo interactuable a pie: conduciendo va dentro de la cabina
+    anchor: () => (onFoot() ? ch.head(headTmp).clone() : null),
+    hitTest: (ray) => ch.hitTest(ray),
+    actions: [
+      {
+        id: 'speak',
+        icon: 'speak',
+        label: 'Hablar',
+        code: 'KeyH',
+        keyLabel: 'H',
+        run: () => setCard(card.hidden === true),
+        active: () => !card.hidden,
+      },
+      { id: 'jump', icon: 'jump', label: 'Saltar', code: 'Space', keyLabel: '␣', run: () => ch.startJump() },
+      {
+        id: 'kneel', icon: 'kneel', label: 'Arrodillarse', activeLabel: 'Levantarse',
+        code: 'KeyK', keyLabel: 'K', run: () => ch.toggleKneel(), active: () => ch.kneeling,
+      },
+      {
+        id: 'gun', icon: 'gun', label: 'Sacar el arma', activeLabel: 'Enfundar',
+        code: 'KeyG', keyLabel: 'G', run: () => ch.toggleGun(), active: () => ch.armed,
+      },
+      {
+        id: 'fire', icon: 'fire', label: 'Disparar', code: 'KeyF', keyLabel: 'F',
+        run: () => ch.fire(), enabled: () => ch.armed,
+      },
+      { id: 'wave', icon: 'wave', label: 'Saludar', code: 'KeyQ', keyLabel: 'Q', run: () => ch.wave() },
+      { id: 'board', icon: 'board', label: 'Subir a la camioneta', code: 'KeyE', keyLabel: 'E', run: () => opts.onBoard() },
+    ],
+  });
 
-  // ---- teclado (solo a pie)
+  // ── teclado de movimiento (solo a pie)
   const keys = new Set<string>();
   let run = false;
-  const onFoot = () => ch.state === 'foot';
   const onKeyDown = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement | null)?.closest?.('input, textarea')) return;
     if (!onFoot()) return;
     const m = MOVE_KEYS[e.code];
     if (m) { keys.add(m); e.preventDefault(); }
     if (e.key === 'Shift') run = true;
-    if (e.repeat) return;
-    if (e.code === 'Space') { e.preventDefault(); ch.startJump(); }
-    if (e.code === 'KeyK') ch.toggleKneel();
-    if (e.code === 'KeyG') ch.toggleGun();
-    if (e.code === 'KeyF') ch.fire();
-    if (e.code === 'KeyE') opts.onBoard();
-    if (e.code === 'KeyH') { resumeAudio(); ch.speak(text.value); text.value = ''; }
   };
   const onKeyUp = (e: KeyboardEvent) => {
     const m = MOVE_KEYS[e.code];
@@ -111,7 +134,14 @@ export function createCharacterHud(opts: CharacterHudOptions) {
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
 
-  // ---- joystick táctil
+  // ── joystick táctil
+  const stick = document.createElement('div');
+  stick.id = 'charStick';
+  stick.hidden = true;
+  stick.innerHTML = '<i></i>';
+  layer.appendChild(stick);
+  const knob = stick.querySelector('i')!;
+
   const joy = { x: 0, y: 0, id: -1 };
   const joyMove = (e: PointerEvent) => {
     const r = stick.getBoundingClientRect();
@@ -130,11 +160,11 @@ export function createCharacterHud(opts: CharacterHudOptions) {
     joy.id = -1; joy.x = joy.y = 0; knob.style.transform = '';
   };
 
-  // ---- puntero: a dónde mira, y clic sobre él para saludar (o disparar si apunta)
+  // ── puntero: a dónde mira. El clic sobre él lo gestiona el menú de acciones,
+  // así que aquí solo queda disparar cuando está apuntando.
   const ndc = new THREE.Vector2();
   let lastPointer = 0;
   let downAt: [number, number] | null = null;
-  let camRef: THREE.Camera | null = null;
   const ndcOf = (e: PointerEvent, out: THREE.Vector2) => {
     const r = canvas.getBoundingClientRect();
     return out.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -144,20 +174,22 @@ export function createCharacterHud(opts: CharacterHudOptions) {
   const onDown = (e: PointerEvent) => { downAt = [e.clientX, e.clientY]; };
   const raycaster = new THREE.Raycaster();
   const onUp = (e: PointerEvent) => {
-    if (!downAt || !onFoot() || !camRef) return;
+    if (!downAt || !onFoot()) return;
     const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
     downAt = null;
     if (moved > 6) return;
-    if (ch.aiming) { ch.fire(); return; }
-    raycaster.setFromCamera(ndcOf(e, new THREE.Vector2()), camRef);
-    if (ch.hitTest(raycaster.ray)) ch.wave();
+    // apuntando, un clic en el escenario dispara; sobre él abre el menú
+    if (ch.aiming && !menu.open) ch.fire();
   };
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerleave', onLeave);
   canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointerup', onUp);
 
-  // ---- bocadillo
+  // ── bocadillo de diálogo
+  const bubble = document.createElement('div');
+  bubble.id = 'charBubble';
+  layer.appendChild(bubble);
   let bubbleUntil = 0;
   function say(t: string, ms: number) {
     bubble.textContent = t;
@@ -172,7 +204,6 @@ export function createCharacterHud(opts: CharacterHudOptions) {
     say,
     /** Entrada de movimiento relativa a la cámara + punto de mirada. */
     input(camera: THREE.Camera) {
-      camRef = camera;
       camera.getWorldDirection(camFwd);
       camFwd.y = 0;
       camFwd.normalize();
@@ -200,19 +231,28 @@ export function createCharacterHud(opts: CharacterHudOptions) {
       if (st !== lastState) {
         lastState = st;
         const foot = st === 'foot';
-        acts.hidden = !foot;
         stick.hidden = !foot || !matchMedia('(pointer: coarse)').matches;
-        hint.textContent =
-          st === 'drive' ? 'Pausa para que se baje de la camioneta'
-          : st === 'exiting' ? 'Bajando…'
-          : st === 'entering' || (st === 'approach' && ch.boarding) ? 'Volviendo a la camioneta…'
-          : st === 'approach' ? 'Caminando hacia el borde del mirador…'
-          : 'WASD para caminar · Shift corre · clic sobre él para saludar';
-        if (!foot) { keys.clear(); run = false; }
+        hint.textContent = foot
+          ? 'WASD para caminar · Shift corre'
+          : 'Pausa para que se baje de la camioneta';
+        if (!foot) {
+          keys.clear();
+          run = false;
+          setCard(false);
+        }
       }
-      btn('kneel').setAttribute('aria-pressed', String(ch.kneeling));
-      btn('gun').setAttribute('aria-pressed', String(ch.armed));
-      btn('gun').firstChild!.textContent = ch.armed ? 'Enfundar ' : 'Arma ';
+      menu.update(camera);
+
+      // la tarjeta de habla sigue al conductor, justo debajo de sus acciones
+      if (!card.hidden) {
+        const p = ch.head(tmp).clone();
+        p.project(camera);
+        const x = (p.x * 0.5 + 0.5) * canvas.clientWidth;
+        const y = (-p.y * 0.5 + 0.5) * canvas.clientHeight;
+        card.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+        card.classList.toggle('offscreen', p.z >= 1);
+      }
+
       if (performance.now() < bubbleUntil) {
         const p = ch.head(tmp);
         p.y += 0.3;
@@ -230,8 +270,9 @@ export function createCharacterHud(opts: CharacterHudOptions) {
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointerup', onUp);
+      menu.dispose();
       voice.dispose();
-      panel.remove();
+      card.remove();
       bubble.remove();
       stick.remove();
     },

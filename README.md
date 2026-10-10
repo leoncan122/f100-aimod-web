@@ -86,6 +86,16 @@ basta quitar ese `hidden`.
 **Cinemática**: `Espacio` play/pausa · barra de scrub · `C` cicla cámara
 (cinemática → trasera → libre) · arrastrar el lienzo para asomarse, soltar para
 volver al encuadre.
+
+Al pausar, el conductor se baja y **sus acciones viven sobre él, no en un panel**:
+un anillo marca que es pulsable y al pulsarlo se abren en abanico, cada una con
+su icono (hablar `H` · saltar `␣` · arrodillarse `K` · arma `G` · disparar `F`,
+solo si va armado · saludar `Q` · subir `E`). Aitziber funciona igual con sus
+gestos (`1`-`5`). En escritorio las teclas actúan siempre, sin abrir nada ni
+apuntar al personaje: el icono de la acción parpadea sobre su cabeza como
+confirmación. En táctil no hay atajos, así que el anillo se muestra siempre.
+Ver `src/ui/action-menu.ts`: el menú es genérico y sirve para cualquier
+personaje u objeto interactivo que se añada después.
 **Modelo**: arrastrar orbita · rueda zoom · `R` auto-rotar · `F` reencuadrar.
 **Desierto**: `Espacio` play/pausa · barra de scrub · `C` cicla cámara
 (persecución → lateral → capó → libre) · arrastrar el lienzo para asomarse.
@@ -129,6 +139,9 @@ node scripts/test-peek.mjs '' desierto     # peek de cámara; 3er arg filtra cas
 node scripts/test-hash-routing.mjs         # enlaces compartibles
 node scripts/measure-idle-cost.mjs         # consumo con la pestaña oculta
 node scripts/test-cinematic-framing.mjs    # encuadre del track por aspecto
+npm run test:acciones                     # acciones ancladas: clic, iconos, teclas, tactil
+npm run test:ui                           # solapes y desbordes de la interfaz en 6 tamaños
+npm run test:modes                        # que vistas publica el tablero (sobre el build)
 node scripts/compare-fit-weight.mjs        # comparativa visual de FIT_WEIGHT
 ```
 

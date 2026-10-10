@@ -4,6 +4,8 @@ import { buildHeightfield } from './terrain';
 import type { Heightfield } from './terrain';
 import { measureBody, separate, pushFromSegment, roundRadius } from './body';
 import type { BodyCollider, BodyShape, Segment } from './body';
+import { createActionMenu } from '../ui/action-menu';
+import type { IconId } from '../ui/icons';
 
 /**
  * Aitziber: la acompañante del conductor en la cinemática three.js.
@@ -50,8 +52,10 @@ export interface CompanionOptions {
   body: THREE.Object3D;
   groundMeshes: THREE.Mesh[];
   driver: CompanionDriver;
-  /** Contenedor del panel de gestos. */
-  host: HTMLElement;
+  /** Capa libre de la interfaz: sus acciones van ancladas a ella en la escena. */
+  layer: HTMLElement;
+  /** Lienzo del visor, para proyectar y detectar el clic sobre ella. */
+  canvas: HTMLCanvasElement;
 }
 
 // ───────────────────────── utilidades
@@ -687,30 +691,44 @@ export function createCompanion(opts: CompanionOptions) {
     }
   }
 
-  // ── panel de gestos
-  const panel = document.createElement('div');
-  panel.id = 'aitziPanel';
-  panel.className = 'panel';
-  panel.innerHTML = `
-    <div class="who"><b>Aitziber</b><span class="now"></span></div>
-    <div class="acts">
-      <button type="button" class="btn" data-g="wave">Saludar <kbd>1</kbd></button>
-      <button type="button" class="btn" data-g="laugh">Reír <kbd>2</kbd></button>
-      <button type="button" class="btn" data-g="jump">Saltar <kbd>3</kbd></button>
-      <button type="button" class="btn" data-g="hug">Abrazarle <kbd>4</kbd></button>
-      <button type="button" class="btn" data-g="kiss">Beso <kbd>5</kbd></button>
-    </div>`;
-  opts.host.appendChild(panel);
-  const nowEl = panel.querySelector<HTMLSpanElement>('.now')!;
-  const buttons = [...panel.querySelectorAll<HTMLButtonElement>('[data-g]')];
-  for (const b of buttons) b.onclick = () => { request(b.dataset.g as GestureId); b.blur(); };
-  const KEYS: Record<string, GestureId> = { Digit1: 'wave', Digit2: 'laugh', Digit3: 'jump', Digit4: 'hug', Digit5: 'kiss', Numpad1: 'wave', Numpad2: 'laugh', Numpad3: 'jump', Numpad4: 'hug', Numpad5: 'kiss' };
-  const onKey = (e: KeyboardEvent) => {
-    if ((e.target as HTMLElement | null)?.closest?.('input, textarea')) return;
-    const g = KEYS[e.code];
-    if (g && !e.repeat) { e.preventDefault(); request(g); }
+  // ── acciones ancladas a ella: salen al pulsarla, y las teclas 1-5 siempre
+  // funcionan sin tener que abrir nada (ver src/ui/action-menu.ts).
+  const headTmp = V();
+  /** Prueba de clic: cilindro de cuerpo alrededor de su raíz. */
+  const hitTest = (ray: THREE.Ray) => {
+    for (let s = 0; s < 40; s += 0.05) {
+      const q = ray.at(s, V());
+      if (q.y > pos.y && q.y < pos.y + 1.8 && Math.hypot(q.x - pos.x, q.z - pos.z) < 0.3) return true;
+    }
+    return false;
   };
-  window.addEventListener('keydown', onKey);
+  /** Mientras camina a su sitio o ya está en un gesto, no acepta otro. */
+  const canGesture = () => state === 'foot' && !gesture && !pending;
+  const ACTION_ICON: Record<GestureId, IconId> = {
+    wave: 'wave', laugh: 'laugh', jump: 'jump', hug: 'hug', kiss: 'kiss',
+  };
+  const ACTION_LABEL: Record<GestureId, string> = {
+    wave: 'Saludar', laugh: 'Reír', jump: 'Saltar', hug: 'Abrazarle', kiss: 'Dar un beso',
+  };
+  const ORDER: GestureId[] = ['wave', 'laugh', 'jump', 'hug', 'kiss'];
+  let menuWasFoot = false;
+  const menu = createActionMenu({
+    layer: opts.layer,
+    canvas: opts.canvas,
+    title: 'Aitziber',
+    // sentada va dentro de la cabina: no se puede interactuar con ella
+    anchor: () => (state === 'foot' ? bones.head.getWorldPosition(headTmp).clone() : null),
+    hitTest,
+    actions: ORDER.map((id, i) => ({
+      id,
+      icon: ACTION_ICON[id],
+      label: ACTION_LABEL[id],
+      code: `Digit${i + 1}`,
+      keyLabel: String(i + 1),
+      run: () => request(id),
+      enabled: canGesture,
+    })),
+  });
 
   // ── bucle
   function update(dt: number) {
@@ -881,11 +899,12 @@ export function createCompanion(opts: CompanionOptions) {
       if (f.life >= f.max) { scene.remove(f.s); f.s.material.dispose(); floaters.splice(i, 1); }
     }
 
-    // panel
+    // menú de acciones: se oculta si no está a pie y desactiva lo que no toca
     const onFoot = state === 'foot';
-    panel.classList.toggle('foot', onFoot);
-    for (const b of buttons) b.disabled = !onFoot || !!gesture || !!pending;
-    nowEl.textContent = label;
+    if (onFoot !== menuWasFoot) {
+      menuWasFoot = onFoot;
+      if (!onFoot) menu.close();
+    }
   }
 
   return {
@@ -899,13 +918,16 @@ export function createCompanion(opts: CompanionOptions) {
     /** Puertas abiertas (segmentos en planta) que no puede atravesar a pie. */
     setSegments(list: Segment[]) { segments = list; },
     request,
+    /** Qué está haciendo ahora (para rótulos o pruebas). */
+    get label() { return label; },
     update,
+    /** Coloca y refresca sus acciones; se llama tras `update` con la cámara. */
+    updateUi(camera: THREE.Camera) { menu.update(camera); },
     dispose() {
-      window.removeEventListener('keydown', onKey);
+      menu.dispose();
       driver.setObstacles([]);
       driver.setSocial({ look: null, engaged: false });
       driver.setEmbrace(0);
-      panel.remove();
       for (const f of floaters) { scene.remove(f.s); f.s.material.dispose(); }
       for (const tx of Object.values(TEX)) tx.dispose();
       scene.remove(actor);
