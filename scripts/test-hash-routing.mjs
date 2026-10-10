@@ -1,5 +1,5 @@
 /**
- * Verifica los enlaces compartibles por hash (#cinematic / #orbit / #desert).
+ * Verifica los enlaces compartibles por hash (#cinematic-three / #orbit / #desert).
  *
  * Cubre: carga directa por URL, hash desconocido, normalizacion al arrancar sin
  * hash, escritura del hash al pulsar una pestaña, y el boton atras/adelante.
@@ -8,6 +8,8 @@ import puppeteer from 'puppeteer-core';
 import { DEFAULT_BASE } from './lib/viewer.mjs';
 
 const BASE = process.argv[2] ?? DEFAULT_BASE;
+// Debe coincidir con DEFAULT_MODE en src/types.ts.
+const DEFAULT_MODE = 'cinematic-three';
 
 const browser = await puppeteer.launch({
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -40,29 +42,29 @@ try {
   page.on('pageerror', (e) => console.log('[PAGEERROR]', e.message.slice(0, 300)));
 
   // 1. carga directa por hash: es el caso del enlace compartido
-  for (const id of ['desert', 'orbit', 'cinematic']) {
+  for (const id of ['desert', 'orbit', DEFAULT_MODE]) {
     await page.goto(`${BASE}#${id}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
     check(`carga directa #${id}`, await activeTab(page), id);
   }
 
   // 2. hash desconocido -> modo por defecto, y URL normalizada.
-  // Importante: venimos de #cinematic, asi que cambiar solo el hash es una
+  // Importante: venimos del modo por defecto, asi que cambiar solo el hash es una
   // navegacion del MISMO documento y la pagina no se recarga. Es el caso de pegar
   // un hash a mano en una pestaña ya abierta, y no lo cubre el codigo de arranque.
   await page.goto(`${BASE}#asdf`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  check('hash invalido #asdf -> pestaña', await activeTab(page), 'cinematic');
-  check('hash invalido #asdf -> URL normalizada', await hash(page), '#cinematic');
+  check('hash invalido #asdf -> pestaña', await activeTab(page), DEFAULT_MODE);
+  check('hash invalido #asdf -> URL normalizada', await hash(page), `#${DEFAULT_MODE}`);
 
   // 3. sin hash -> por defecto, con la URL normalizada para poder compartirla
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  check('sin hash -> pestaña', await activeTab(page), 'cinematic');
-  check('sin hash -> URL normalizada', await hash(page), '#cinematic');
+  check('sin hash -> pestaña', await activeTab(page), DEFAULT_MODE);
+  check('sin hash -> URL normalizada', await hash(page), `#${DEFAULT_MODE}`);
 
   // 4. pegar un hash valido en la pestaña abierta (sin recarga) cambia de vista
   await page.evaluate(() => { location.hash = '#desert'; });
   check('hash pegado #desert -> pestaña', await activeTab(page), 'desert');
-  await page.evaluate(() => { location.hash = '#cinematic'; });
-  check('hash pegado #cinematic -> pestaña', await activeTab(page), 'cinematic');
+  await page.evaluate((m) => { location.hash = `#${m}`; }, DEFAULT_MODE);
+  check(`hash pegado #${DEFAULT_MODE} -> pestaña`, await activeTab(page), DEFAULT_MODE);
 
   // 5. pulsar una pestaña escribe el hash
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
@@ -81,8 +83,8 @@ try {
   check('atras -> pestaña', await activeTab(page), 'desert');
 
   await page.goBack();
-  check('atras x2 -> hash', await hash(page), '#cinematic');
-  check('atras x2 -> pestaña', await activeTab(page), 'cinematic');
+  check('atras x2 -> hash', await hash(page), `#${DEFAULT_MODE}`);
+  check('atras x2 -> pestaña', await activeTab(page), DEFAULT_MODE);
 
   // 7. adelante
   await page.goForward();

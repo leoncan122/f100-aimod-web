@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createCinematicMode } from './modes/cinematic';
 import { createOrbitMode } from './modes/orbit';
 import { createDesertMode } from './modes/desert';
-import { DEFAULT_MODE, isModeId } from './types';
+import { DEFAULT_MODE, isModeId, VISIBLE_MODES } from './types';
 import type { ModeId, ViewerMode } from './types';
 import { createOverlay } from './ui/overlay';
 
@@ -16,12 +16,17 @@ export function createApp(root: HTMLElement) {
   // Toda la interfaz vive en una rejilla propia: así los controles de cada modo
   // se reparten el espacio en vez de solaparse flotando sobre las esquinas.
   const ui = createOverlay(root);
-  ui.tabs.innerHTML = `
-    <button class="tab on" data-mode="cinematic">Cinemática</button>
-    <button class="tab" data-mode="cinematic-three">Cinemática three.js</button>
-    <button class="tab" data-mode="orbit">Modelo</button>
-    <button class="tab" data-mode="desert">Desierto</button>
-  `;
+  // Las pestañas salen de la lista de modos publicados: una vista oculta
+  // desaparece del tablero sin tocar esto.
+  ui.tabs.replaceChildren(
+    ...VISIBLE_MODES.map(({ id, label }) => {
+      const b = document.createElement('button');
+      b.className = 'tab';
+      b.dataset.mode = id;
+      b.textContent = label;
+      return b;
+    }),
+  );
   const statsEl = ui.stats;
   const loading = root.querySelector<HTMLDivElement>('#loading')!;
   const msg = root.querySelector<HTMLDivElement>('#msg')!;

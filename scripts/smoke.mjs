@@ -35,7 +35,7 @@ try {
   // entonces no hay handler de hashchange al que avisar. Se cronometra aqui para
   // que el primer modo reporte su carga real y no un loadMs de milisegundos.
   const firstStart = Date.now();
-  await page.goto(new URL('#cinematic', BASE).href, {
+  await page.goto(new URL('#cinematic-three', BASE).href, {
     waitUntil: 'networkidle2',
     timeout: 120_000,
   });
@@ -45,7 +45,9 @@ try {
   );
   let firstLoadMs = Date.now() - firstStart;
 
-  for (const mode of ['cinematic', 'orbit', 'desert']) {
+  // Solo las vistas publicadas (la cinematica de Blender esta oculta: ver MODES
+  // en src/types.ts).
+  for (const mode of ['cinematic-three', 'orbit', 'desert']) {
     const before = errors.length;
     const start = Date.now();
 

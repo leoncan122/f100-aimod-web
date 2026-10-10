@@ -4,9 +4,11 @@ Visor 3D del proyecto Blender **F100** montado con **three.js** + **Vite** + **T
 
 Tres modos, conmutables desde las pestañas superiores:
 
-- **Cinemática** — la escena completa (`escena.glb`) con las 119 animaciones horneadas
-  y el track de cámara de Blender (`camara.json`: posición, rotación y FOV horizontal
-  por frame, 24 fps, 1700 frames ≈ 71 s). Play/pausa, barra de scrub y cámara libre.
+- **Cinemática** — misma película que el track horneado de Blender (`camara.json`:
+  posición, rotación y FOV horizontal por frame, 24 fps, 1700 frames ≈ 71 s), pero
+  con el paisaje generado con three.js alrededor del recorrido; del glb solo salen
+  la camioneta y el perro. Conductor riggeado que se baja al pausar, Aitziber de
+  acompañante y puertas que se abren. Play/pausa, barra de scrub y cámara libre.
 - **Modelo** — inspección orbital solo de la camioneta, extraída del subárbol
   `HandlerVehicle005`. Auto-rotación, wireframe, reencuadre y dimensiones reales.
 - **Desierto** — escena original hecha 100 % con three.js: recta de desierto al
@@ -56,7 +58,7 @@ npm run smoke    # test de humo en Chrome headless (requiere dev server activo)
 Cada vista tiene su propia URL mediante el hash, así que se puede compartir un
 enlace directo a una de ellas:
 
-- `#cinematic` — Cinemática (por defecto)
+- `#cinematic-three` — Cinemática (por defecto)
 - `#orbit` — Modelo
 - `#desert` — Desierto
 
@@ -68,6 +70,16 @@ que se ve.
 Se usa el hash y no una ruta real (`/desert`) porque el sitio se publica en
 GitHub Pages: el hash no llega al servidor, así que un enlace directo funciona
 sin configuración extra, mientras que una ruta devolvería 404.
+
+## Vistas ocultas
+
+La cinemática con el paisaje horneado de Blender (`escena.glb`, 119 animaciones)
+sigue en el repo —`src/modes/cinematic.ts` con `landscape: 'blender'`— pero no se
+publica: se mantiene como referencia interna para comparar con la versión
+three.js. Está marcada `hidden` en `MODES` (`src/types.ts`), así que no sale en
+las pestañas ni acepta el hash `#cinematic` en producción. En `npm run dev` sí
+aparece, para poder seguir midiéndola con los scripts. Para volver a publicarla
+basta quitar ese `hidden`.
 
 ## Controles
 
