@@ -390,6 +390,11 @@ export function createCompanion(opts: CompanionOptions) {
   /** lado al que camina respecto al conductor: +1 su izquierda, -1 su derecha */
   let side = -1;
   let faceYaw: number | null = null;
+  /** Detección de atasco: posición del frame anterior y tiempo sin avanzar. */
+  const lastPos = V();
+  let stuckT = 0;
+  /** Desvío temporal para despegarse de un obstáculo (ver el bucle). */
+  let unstick: { x: number; z: number; t: number } | null = null;
   const exitFrom = { pos: V(), quat: new THREE.Quaternion() };
   const exitTo = { pos: V(), yaw: 0 };
   let gesture: { id: GestureId; t: number } | null = null;
@@ -577,12 +582,16 @@ export function createCompanion(opts: CompanionOptions) {
     stateT = 0;
     gesture = null;
     pending = null;
+    stuckT = 0;
+    unstick = null;
     label = 'Bajándose';
   }
   function board() {
     if (state !== 'foot') return;
     gesture = null;
     pending = null;
+    stuckT = 0;
+    unstick = null;
     state = 'boarding';
     label = 'Volviendo al coche';
   }
@@ -634,6 +643,42 @@ export function createCompanion(opts: CompanionOptions) {
     }
     return false;
   };
+
+  /**
+   * Distancia de un punto al segmento de una puerta abierta (en planta).
+   *
+   * Las puertas son obstáculos que aparecen y desaparecen, y están justo donde
+   * ella se baja: sin tenerlas en cuenta al planificar, la ruta recta las
+   * atraviesa, `collide` la empuja fuera cada frame y ella vuelve a empujar —
+   * se queda trabada contra la hoja en vez de rodearla.
+   */
+  const distToSeg = (x: number, z: number, sg: Segment) => {
+    const abx = sg.bx - sg.ax, abz = sg.bz - sg.az;
+    const l2 = abx * abx + abz * abz || 1e-9;
+    const u = Math.min(1, Math.max(0, ((x - sg.ax) * abx + (z - sg.az) * abz) / l2));
+    return Math.hypot(x - (sg.ax + abx * u), z - (sg.az + abz * u));
+  };
+  /** True si el tramo a→b (en mundo) roza alguna puerta abierta.
+   *
+   * No cuenta los primeros `clear` metros: al bajarse ella queda pegada a su
+   * propia puerta, así que el origen está siempre "dentro" de la hoja. Si se
+   * midiera también ahí, toda ruta saldría bloqueada y no se elegiría ningún
+   * desvío — justo el bloqueo que esto viene a arreglar.
+   */
+  const hitsDoors = (a: THREE.Vector3, b: THREE.Vector3, clear: number) => {
+    if (!segments.length) return false;
+    const total = Math.hypot(b.x - a.x, b.z - a.z);
+    if (total < 1e-4) return false;
+    const skip = Math.min(0.9, clear + 0.05) / total;
+    for (let i = 0; i <= 20; i++) {
+      const u = i / 20;
+      if (u < skip) continue;
+      const x = lerp(a.x, b.x, u), z = lerp(a.z, b.z, u);
+      for (const sg of segments) if (distToSeg(x, z, sg) < sg.r + clear) return true;
+    }
+    return false;
+  };
+
   function routeAround(goal: THREE.Vector3) {
     // choque contra la carrocería con su radio (estrecho); esquinas de paso con holgura
     const R = 0.2, M = 0.55;
@@ -647,17 +692,55 @@ export function createCompanion(opts: CompanionOptions) {
       g.set(out[1]!, g.y, out[2]!);
       goal = g.clone().applyMatrix4(vehicle.matrixWorld).setY(goal.y);
     }
-    if (!segHitsBox(h, g, b0, b1, c0, c1z)) return { to: goal, direct: true };
+    // Radio con el que esquivar una hoja de puerta: su cuerpo más un dedo de
+    // aire, para no ir rozándola.
+    //
+    // Volviendo al coche la meta ES su puerta, así que ahí no cuentan como
+    // obstáculo: si no, nunca podría llegar al hueco para sentarse.
+    const clear = roundRadius(shape) + 0.1;
+    const avoidDoors = state === 'foot';
+    const boxBlocked = segHitsBox(h, g, b0, b1, c0, c1z);
+    const doorBlocked = avoidDoors && hitsDoors(pos, goal, clear);
+    if (!boxBlocked && !doorBlocked) return { to: goal, direct: true };
+
+    // ── 1) puerta en medio pero carrocería libre: basta con dar un paso al
+    // lado. Se prueban desvíos perpendiculares crecientes a ambos lados y se
+    // coge el primero que deje libres los dos tramos (hacia el desvío y del
+    // desvío a la meta); así rodea la hoja en vez de empujarla.
+    if (doorBlocked) {
+      const dx = goal.x - pos.x, dz = goal.z - pos.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const px = -dz / len, pz = dx / len; // perpendicular a la ruta
+      const mid = V((pos.x + goal.x) / 2, goal.y, (pos.z + goal.z) / 2);
+      for (const off of [0.5, 0.8, 1.15, 1.5, 1.9]) {
+        for (const s of [1, -1]) {
+          const way = V(mid.x + px * off * s, goal.y, mid.z + pz * off * s);
+          const wl = way.clone().applyMatrix4(inv);
+          if (segHitsBox(h, wl, b0, b1, c0, c1z)) continue;
+          if (hitsDoors(pos, way, clear) || hitsDoors(way, goal, clear)) continue;
+          return { to: way, direct: false };
+        }
+      }
+    }
+
+    // ── 2) carrocería en medio: rodearla por la esquina más corta, descartando
+    // las que pasen por una puerta abierta.
     const sideX = (x: number) => (x >= 0 ? x1 : x0);
     let best: THREE.Vector3 | null = null, bestLen = Infinity;
     for (const z of [z0, z1]) {
       const c1 = V(sideX(h.x), h.y, z), c2 = V(sideX(g.x), h.y, z);
       const len = h.distanceTo(c1) + c1.distanceTo(c2) + c2.distanceTo(g);
       if (len >= bestLen) continue;
+      const pick = !segHitsBox(h, c2, b0, b1, c0, c1z) ? c2 : c1;
+      const w = pick.clone().applyMatrix4(vehicle.matrixWorld).setY(goal.y);
+      // una esquina que obligue a cruzar una puerta no vale como paso
+      if (avoidDoors && hitsDoors(pos, w, clear)) continue;
       bestLen = len;
-      best = !segHitsBox(h, c2, b0, b1, c0, c1z) ? c2 : c1;
+      best = w;
     }
-    return { to: best!.applyMatrix4(vehicle.matrixWorld).setY(goal.y), direct: false };
+    // Si TODO está bloqueado se va directa: `collide` la mantiene fuera de los
+    // obstáculos y es preferible a quedarse parada sin ruta.
+    return best ? { to: best, direct: false } : { to: goal, direct: true };
   }
 
   /** Fuera de la camioneta y sin pisar al conductor. */
@@ -831,6 +914,34 @@ export function createCompanion(opts: CompanionOptions) {
         const dist = r.direct ? steer(dt, r.to, maxSpeed, arrive) : (steer(dt, r.to, maxSpeed, 0.05), Infinity);
         if (dist <= arrive && speed < 0.08 && goalYaw !== null) faceYaw = goalYaw;
         else if (dist > arrive) faceYaw = null;
+
+        // ── red de seguridad: si pese a la ruta sigue sin avanzar (empujada
+        // contra una hoja, o rodeada por puerta y carrocería a la vez), se la
+        // desvía a un lado unos instantes para que se despegue. Sin esto un
+        // caso no previsto la deja embistiendo el obstáculo indefinidamente.
+        const moved = Math.hypot(pos.x - lastPos.x, pos.z - lastPos.z);
+        lastPos.set(pos.x, 0, pos.z);
+        const wants = dist > arrive;
+        stuckT = wants && moved < dt * 0.12 ? stuckT + dt : 0;
+        if (stuckT > 0.45) {
+          // perpendicular a la meta, hacia el lado más despejado
+          const dx = goal.x - pos.x, dz = goal.z - pos.z;
+          const l = Math.hypot(dx, dz) || 1;
+          if (!unstick) {
+            const px = -dz / l, pz = dx / l;
+            const clear = roundRadius(shape) + 0.1;
+            const probe = (s: number) => V(pos.x + px * 1.1 * s, pos.y, pos.z + pz * 1.1 * s);
+            const free = (s: number) => !hitsDoors(pos, probe(s), clear);
+            const s = free(1) ? 1 : free(-1) ? -1 : Math.random() < 0.5 ? 1 : -1;
+            unstick = { x: pos.x + px * 1.25 * s, z: pos.z + pz * 1.25 * s, t: 0 };
+          }
+        }
+        if (unstick) {
+          unstick.t += dt;
+          steer(dt, V(unstick.x, pos.y, unstick.z), maxSpeed, 0.1);
+          const near = Math.hypot(unstick.x - pos.x, unstick.z - pos.z) < 0.18;
+          if (unstick.t > 1.3 || near) { unstick = null; stuckT = 0; }
+        }
       } else {
         speed *= Math.exp(-dt * 7);
       }

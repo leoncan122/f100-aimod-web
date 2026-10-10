@@ -60,7 +60,7 @@ const ARC = Math.PI * 0.62;
 const LIFT = 28;
 const FLASH_MS = 900;
 /** Diámetro del botón (.amBtn en el CSS) más el aire mínimo entre dos. */
-const BTN = 44, PAD = 8;
+const BTN = 50, PAD = 8;
 
 export function createActionMenu(opts: ActionMenuOptions) {
   const { layer, canvas, anchor, hitTest } = opts;

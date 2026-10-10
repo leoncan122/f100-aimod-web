@@ -81,6 +81,31 @@ las pestañas ni acepta el hash `#cinematic` en producción. En `npm run dev` s�
 aparece, para poder seguir midiéndola con los scripts. Para volver a publicarla
 basta quitar ese `hidden`.
 
+## Aitziber y los obstáculos
+
+Al bajarse queda pegada a su propia puerta abierta y tiene que cruzar hasta el
+conductor. Su planificador (`routeAround` en `src/character/companion.ts`)
+esquivaba solo la carrocería, así que la ruta recta atravesaba la hoja: el
+empuje de `collide` la sacaba cada frame y ella volvía a entrar, quedándose
+trabada contra la puerta indefinidamente.
+
+Ahora las puertas abiertas entran en la planificación, en tres capas:
+
+1. `hitsDoors` comprueba si el tramo roza una hoja. No mide los primeros
+   `clear` metros: al bajarse el origen está siempre dentro de su propia
+   puerta, y medirlo ahí bloquearía todas las rutas.
+2. Si solo estorba una puerta, se prueban desvíos perpendiculares crecientes a
+   ambos lados y se toma el primero con los dos tramos libres.
+3. Red de seguridad: si aun así deja de avanzar ~0,45 s, se la manda a un punto
+   lateral despejado durante un momento para despegarla.
+
+Volviendo al coche las puertas **no** cuentan como obstáculo (`avoidDoors`): su
+meta es justamente el hueco de la puerta.
+
+`npm run test:aitzi` lo cubre. Con el código anterior ese test no termina —se
+queda en el bucle de empuje—; con el arreglo recorre 2,22 m → 0,99 m sin un
+solo frame trabada y manteniéndose a 1,74 m de la hoja.
+
 ## Controles
 
 **Cinemática**: `Espacio` play/pausa · barra de scrub · `C` cicla cámara
@@ -140,6 +165,8 @@ node scripts/test-hash-routing.mjs         # enlaces compartibles
 node scripts/measure-idle-cost.mjs         # consumo con la pestaña oculta
 node scripts/test-cinematic-framing.mjs    # encuadre del track por aspecto
 npm run test:acciones                     # acciones ancladas: clic, iconos, teclas, tactil
+npm run test:aitzi                        # que Aitziber no se trabe con las puertas abiertas
+npm run icons                             # hoja de contacto de los iconos, al tamaño real
 npm run test:ui                           # solapes y desbordes de la interfaz en 6 tamaños
 npm run test:modes                        # que vistas publica el tablero (sobre el build)
 node scripts/compare-fit-weight.mjs        # comparativa visual de FIT_WEIGHT
