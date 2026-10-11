@@ -111,12 +111,20 @@ def preparar_pintura(obj, img):
 
     # Clone: copia de una zona sana a la estropeada. Es lo que hace falta aquí;
     # un color plano se vería como un parche sin grano ni sombra.
+    #
+    # OJO: desde Blender 4.3 los pinceles son assets y `bpy.data.brushes` suele
+    # estar vacío al arrancar, así que esto normalmente NO funciona y hay que
+    # elegir Clone a mano en la barra de pinceles. Se intenta igualmente por si
+    # la versión lo permite, y si no se avisa por consola.
     for nombre in ('Clone', 'TexDraw'):
         pincel = bpy.data.brushes.get(nombre)
         if pincel:
             ajustes.brush = pincel
             print(f'[retoque] pincel: {nombre}')
             break
+    else:
+        print('[retoque] ELIGE "Clone" A MANO en la barra de pinceles de abajo '
+              '(pestaña All). Ver docs/retoque-textura.md')
     if ajustes.brush:
         ajustes.brush.size = 60
         ajustes.brush.strength = 0.85
