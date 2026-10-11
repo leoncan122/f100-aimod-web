@@ -106,6 +106,54 @@ meta es justamente el hueco de la puerta.
 queda en el bucle de empuje—; con el arreglo recorre 2,22 m → 0,99 m sin un
 solo frame trabada y manteniéndose a 1,74 m de la hoja.
 
+## Retoques del conductor
+
+El modelo viene de un escaneo fotogramétrico y traía dos defectos.
+
+**Proporciones.** La cabeza medía 0,116 de la altura (lo humano ronda 0,085) y
+los brazos salían demasiado gruesos. `node scripts/afinar-personaje.mjs --write`
+acerca los vértices al eje de su hueso dominante — cabeza y cuello −10%, brazos
+−14%, hombros −7% — y reescribe el `.glb`. **El esqueleto no se toca**, así que
+ninguna longitud ósea cambia y la biomecánica queda intacta: IK de manos y pies,
+poses procedurales, marcha, salto y animaciones dan el mismo resultado. Escalar
+huesos sí lo habría roto.
+
+Los morphs de boca de `character.ts` seleccionan vértices por coordenadas
+absolutas, así que podían quedarse sin malla: `node scripts/probe-boca.mjs` mide
+que los vértices con peso de mandíbula pasan de 856 a 848 (−0,9%) y que el radio
+del hit-test no cambia.
+
+**Blanco de la camiseta sobre la piel.** El escaneo proyectó parte de la prenda
+sobre el brazo y el hombro. No es filtrado de mipmaps (comprobado: desactivarlos
+no cambia nada), está pintado en la textura. El arreglo va en dos pasos:
+
+    node scripts/build-mask-piel.mjs    # máscara UV de piel desnuda, desde la geometría
+    node scripts/fix-textura.mjs        # repinta por difusión desde la piel sana
+    node scripts/aplicar-textura.mjs --write
+
+La máscara se construye rasterizando en el atlas los triángulos que el esqueleto
+dice que son brazo, deltoides o cuello: dentro de ella la superficie es piel por
+construcción, así que un píxel descolorido es derrame sin ambigüedad. Decidir
+por color no funciona — se probó con radio de piel por píxel y con regiones
+conexas, y o no cambiaba nada o se comía la prenda.
+
+Dos umbrales quedaron medidos a base de fallar, no elegidos a ojo:
+
+- **hombro, `|x| > 0.16`**: el hueso `shoulder` cubre deltoides y tirante a la
+  vez. Con 0,135 el repintado mete tono de piel encima del tirante (peor que el
+  blanco original); el margen útil es de 2,5 cm.
+- **cabeza fuera de la máscara**: los labios son rosados y poco saturados, caen
+  en el criterio de «descolorido» y el repintado les quita el color. Solo entra
+  el cuello por debajo de la barbilla.
+
+Los píxeles sin piel sana alrededor se dejan como están: rellenarlos con un tono
+plano deja un manchón de plastilina en el cuello, peor que el resto de blanco.
+
+Para revisarlo a ojo: `node scripts/inspect-personaje.mjs` (primeros planos y
+volcado de la textura) y `node scripts/preview-personaje.mjs` (antes/después sin
+tocar el repo). El original está respaldado en
+`~/hermes-workspace/scratchpad/f100-backup/` además de en git.
+
 ## Controles
 
 **Cinemática**: `Espacio` play/pausa · barra de scrub · `C` cicla cámara
