@@ -14,7 +14,11 @@ const OUT = 'test-results/personaje-preview';
 mkdirSync(OUT, { recursive: true });
 
 // la textura arreglada viaja al navegador como data URL
-const fix = readFileSync('test-results/personaje/textura-fix.png').toString('base64');
+const TEX = process.argv[3] ?? 'test-results/personaje/textura-fix.png';
+const fix = readFileSync(TEX).toString('base64');
+// El afinado de proporciones ya esta dentro del .glb desde el commit 69c0b24;
+// volver a aplicarlo aqui lo duplicaria y daria una vista enganosa.
+const AFINAR = process.argv.includes('--afinar');
 
 const browser = await launch();
 try {
@@ -23,7 +27,7 @@ try {
   page.on('pageerror', (e) => console.log('[PAGEERROR]', e.message.slice(0, 300)));
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120_000 });
 
-  await page.evaluate(async () => {
+  await page.evaluate(async (AFINAR_FLAG) => {
     const THREE = await import('/node_modules/three/build/three.module.js');
     const { GLTFLoader } = await import('/node_modules/three/examples/jsm/loaders/GLTFLoader.js');
     const { DRACOLoader } = await import('/node_modules/three/examples/jsm/loaders/DRACOLoader.js');
@@ -56,7 +60,7 @@ try {
     gltf.scene.traverse((o) => { if (o.isSkinnedMesh && !skin) skin = o; });
     const geo = skin.geometry;
     window.__v = {
-      THREE, renderer, scene, camera, skin,
+      THREE, renderer, scene, camera, skin, afinar: AFINAR_FLAG,
       original: geo.getAttribute('position').array.slice(),
       texOriginal: skin.material.map,
     };
@@ -71,7 +75,7 @@ try {
     }
     window.__v.dom = dom;
     window.__v.bones = bones;
-  });
+  }, AFINAR);
 
   const shot = async (name, pos, target, fov = 32) => {
     await page.evaluate(([p, t, f]) => {
@@ -111,6 +115,7 @@ try {
     skin.material.map = tex;
     skin.material.needsUpdate = true;
 
+    if (!window.__v.afinar) return;
     // afinado por vértices (esqueleto intacto)
     const geo = skin.geometry;
     const P = geo.getAttribute('position');

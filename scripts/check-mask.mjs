@@ -22,7 +22,8 @@ const OUT = 'test-results/personaje-mask';
 mkdirSync(OUT, { recursive: true });
 
 const SIZE = 2048;
-const raw = readFileSync('test-results/personaje/mask-piel.raw');
+const PARTE = process.argv[3] ?? 'piel';
+const raw = readFileSync(`test-results/personaje/mask-${PARTE}.raw`);
 
 // dos versiones: tal cual, y espejada en V
 const comoEsta = await sharp(raw, { raw: { width: SIZE, height: SIZE, channels: 1 } })
@@ -94,8 +95,8 @@ try {
     }
   };
 
-  await probar('a-como-esta', comoEsta.toString('base64'));
-  await probar('b-espejada', espejada.toString('base64'));
+  await probar(`${PARTE}-a-como-esta`, comoEsta.toString('base64'));
+  await probar(`${PARTE}-b-espejada`, espejada.toString('base64'));
   console.log(`\nblanco = zona marcada como piel. Comparar en ${OUT}/`);
   console.log('si la version correcta marca brazos y cuello, la mascara sirve;');
   console.log('si ninguna lo hace limpiamente, las islas UV se solapan de verdad.');

@@ -1,10 +1,23 @@
 # Retocar a mano la piel derramada sobre la camiseta
 
 El escaneo proyectó tono de piel **encima de la camiseta** en hombros, clavícula
-y cuello. No se arregla por script: el borde piel/prenda no es separable ni por
-color ni por geometría (el hueso `shoulder` cubre las dos cosas a la vez), y
-cada intento automático acababa pintando piel sobre el tirante. A mano son unos
-minutos.
+y cuello. No se arregla por script, y esto está medido, no supuesto:
+
+`node scripts/diag-hombro.mjs` cuenta los vértices que **se ven** como piel en la
+franja del hombro y mira qué hueso los domina. De 4.239:
+
+| Hueso dominante | Vértices | |
+|---|---|---|
+| `upper_arm` | 2.087 (49%) | es brazo: repintarlo de blanco lo destruye |
+| `shoulder` | 2.034 (48%) | mezcla deltoides y tirante |
+| `spine` | 118 (3%) | único alcanzable por una máscara de camiseta |
+
+O sea: **el borde visual piel/prenda no cae donde cambia el hueso**, así que
+ninguna máscara construida desde el esqueleto puede separarlos. Se intentó
+(`scripts/fix-piel-en-camiseta.mjs`, conservado como documentación del límite) y
+el resultado fue pintar blanco sobre el cuello sin apenas tocar la lengüeta.
+
+A mano son unos minutos.
 
 ![dónde pintar](donde-pintar.png)
 
