@@ -40,11 +40,47 @@ const DST = WRITE ? SRC : 'public/models/personaje-afinado.glb';
  * dos lados y no haya que mantener dos juegos de nombres.
  */
 const limpia = (s) => s.replace(/[.\s]/g, '');
-const FACTORES = [
-  { k: 0.9, huesos: ['spine004', 'spine005', 'neck', 'head', 'headfront', 'head_end'], que: 'cabeza y cuello' },
-  { k: 0.86, huesos: ['upper_armL', 'upper_armR', 'forearmL', 'forearmR'], que: 'brazos' },
-  { k: 0.93, huesos: ['shoulderL', 'shoulderR'], que: 'hombros' },
-];
+
+/**
+ * Factor de adelgazado POR HUESO.
+ *
+ * Los huesos que no aparecen valen 1 (sin tocar). El factor de cada vértice se
+ * interpola con sus pesos de skinning, así que la transición entre zonas es
+ * continua: un vértice del borde del hombro recibe algo de 0.93 y algo de 1.
+ *
+ * Los valores intermedios de `shoulder` y `spine003` no son estéticos, son el
+ * puente: sin ellos el salto de 0.86 (brazo) a 1.0 (pecho) deja un escalón
+ * visible en la malla — medido en 23 mm sobre las aristas de la frontera.
+ */
+const K_HUESO = {
+  // CUELLO, no cabeza.
+  //
+  // `spine005` domina cuello Y cara, y su eje va del cuello a la coronilla:
+  // casi vertical y centrado. Acercar la cara a ese eje no la estrecha, la
+  // APLASTA — medido: la nariz se hundía 7,9 mm hacia dentro y la boca 7,0 mm,
+  // que es lo que deformaba el rostro. La cabeza se deja en paz y se afina solo
+  // el cuello, que es lo que de verdad se veía ancho.
+  spine004: 0.93, neck: 0.93,
+  // brazos
+  upper_armL: 0.86, upper_armR: 0.86, forearmL: 0.86, forearmR: 0.86,
+  // hombros: puente entre el brazo y el torso
+  shoulderL: 0.93, shoulderR: 0.93,
+  // pecho alto: un punto de transición hacia el torso sin tocar
+  spine003: 0.97,
+};
+
+/**
+ * Ajustes de Draco al reescribir el .glb.
+ *
+ * DEBEN COINCIDIR con los de scripts/optimize-character.mjs, que es quien
+ * genera el modelo publicado. `draco()` a secas cuantiza posiciones a 10 bits y,
+ * sobre una malla YA cuantizada, eso es una segunda generacion de perdida: se
+ * midio que movia 49.380 vertices que nadie habia tocado, 66 mm de media y
+ * hasta 686 mm en los dedos. Los 14 bits de posicion hacen falta ademas porque
+ * los morphs de la boca se calculan sobre la malla en tiempo de ejecucion y con
+ * menos precision los labios se escalonan.
+ */
+const DRACO = { quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12, quantizeGeneric: 12 };
 
 const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
@@ -122,56 +158,81 @@ for (const prim of skinNode.getMesh().listPrimitives()) {
 
   const v = new Vector3(), p = new Vector3();
   const el = [0, 0, 0];
-  for (const { k, huesos, que } of FACTORES) {
-    const set = new Set(huesos.map(limpia));
-    let tocados = 0;
-    for (let i = 0; i < n; i++) {
-      const nb = nombres[dom[i]];
-      if (!set.has(nb)) continue;
-      const e = ejes.get(nb);
-      if (!e) continue;
-      POS.getElement(i, el);
-      v.set(el[0], el[1], el[2]);
-      // punto del eje más cercano al vértice (proyección acotada al segmento)
-      const t = Math.max(0, Math.min(1, v.clone().sub(e.a).dot(e.d) / (e.d.lengthSq() || 1e-9)));
-      p.copy(e.a).addScaledVector(e.d, t);
-      v.sub(p).multiplyScalar(k).add(p);
-      POS.setElement(i, [v.x, v.y, v.z]);
-      tocados++;
-    }
-    resumen.push({ que, k, tocados });
-  }
 
-  // ── normales: tras mover vértices hay que recalcularlas o la luz se ve mal
-  const NOR = prim.getAttribute('NORMAL');
-  const IDX = prim.getIndices();
-  if (NOR && IDX) {
-    const acc = new Float32Array(n * 3);
-    const a = new Vector3(), b = new Vector3(), c = new Vector3();
-    const ab = new Vector3(), ac = new Vector3(), cross = new Vector3();
-    const t0 = [0, 0, 0], t1 = [0, 0, 0], t2 = [0, 0, 0];
-    const ic = IDX.getCount();
-    for (let k = 0; k < ic; k += 3) {
-      const i0 = IDX.getScalar(k), i1 = IDX.getScalar(k + 1), i2 = IDX.getScalar(k + 2);
-      POS.getElement(i0, t0); POS.getElement(i1, t1); POS.getElement(i2, t2);
-      a.set(t0[0], t0[1], t0[2]); b.set(t1[0], t1[1], t1[2]); c.set(t2[0], t2[1], t2[2]);
-      ab.subVectors(b, a); ac.subVectors(c, a);
-      cross.crossVectors(ab, ac); // sin normalizar: pondera por area del triangulo
-      for (const i of [i0, i1, i2]) {
-        acc[i * 3] += cross.x; acc[i * 3 + 1] += cross.y; acc[i * 3 + 2] += cross.z;
-      }
+  // ── una sola pasada: cada vértice recibe el factor interpolado con SUS pesos.
+  //
+  // Antes se hacía un bucle por grupo aplicando el factor entero al hueso
+  // dominante. Eso corta en seco: dos vértices vecinos a un lado y otro de la
+  // frontera recibían 0.86 y 1.0, y la malla daba un escalón (medido: 23 mm de
+  // salto en las aristas que la cruzan). Interpolando con los pesos del
+  // skinning la transición es continua, igual que la deformación del rig.
+  let tocados = 0;
+  const cuenta = new Map();
+  const movidos = new Map(); // indice -> cuanto se movio (m)
+  for (let i = 0; i < n; i++) {
+    JOI.getElement(i, ji);
+    WEI.getElement(i, wi);
+
+    // factor del vértice: media de los factores de sus huesos, por peso
+    let kv = 0, wTotal = 0, mejorK = 1, mejorW = -1, mejorNb = null;
+    for (let c = 0; c < 4; c++) {
+      const w = wi[c];
+      if (!(w > 0)) continue;
+      const nb = nombres[ji[c]];
+      const kh = K_HUESO[nb] ?? 1;
+      kv += kh * w;
+      wTotal += w;
+      // el eje de referencia es el del hueso afinado con más peso
+      if (kh !== 1 && w > mejorW) { mejorW = w; mejorK = kh; mejorNb = nb; }
     }
-    for (let i = 0; i < n; i++) {
-      const x = acc[i * 3], y = acc[i * 3 + 1], z = acc[i * 3 + 2];
-      const l = Math.hypot(x, y, z) || 1;
-      NOR.setElement(i, [x / l, y / l, z / l]);
-    }
-    console.log('normales recalculadas');
+    if (wTotal <= 0 || !mejorNb) continue;
+    kv /= wTotal;
+    if (kv >= 0.9995) continue; // sin cambio apreciable
+
+    const e = ejes.get(mejorNb);
+    if (!e) continue;
+    POS.getElement(i, el);
+    v.set(el[0], el[1], el[2]);
+    // punto del eje más cercano al vértice (proyección acotada al segmento)
+    const t = Math.max(0, Math.min(1, v.clone().sub(e.a).dot(e.d) / (e.d.lengthSq() || 1e-9)));
+    p.copy(e.a).addScaledVector(e.d, t);
+    const antesX = v.x, antesY = v.y, antesZ = v.z;
+    v.sub(p).multiplyScalar(kv).add(p);
+    POS.setElement(i, [v.x, v.y, v.z]);
+    tocados++;
+    movidos.set(i, Math.hypot(v.x - antesX, v.y - antesY, v.z - antesZ));
+    cuenta.set(mejorNb, (cuenta.get(mejorNb) ?? 0) + 1);
   }
+  resumen.push({ tocados, cuenta });
+
+  // ── normales: NO se tocan. A propósito.
+  //
+  // Historial de tres intentos, todos peores que no hacer nada:
+  //
+  //   recalcular toda la malla promediando por índice   -> 33% de costuras rotas
+  //   promediar por posición (unificando copias)        ->  0%, pero borra TODOS
+  //                                                         los bordes duros y
+  //                                                         deja la cara plana
+  //   recalcular solo los vértices movidos              -> 17%, sigue aplanando
+  //
+  // El original tiene un 6,5% de costuras con salto fuerte: son bordes duros
+  // puestos a mano (labios, aletas de la nariz, párpados, borde del pelo). No
+  // son un promedio de caras, así que CUALQUIER recálculo los destruye y el
+  // rostro pierde el relieve.
+  //
+  // Como el afinado es pequeño y radial (acerca vértices al eje del hueso sin
+  // cambiar la orientación de las superficies), las normales originales siguen
+  // siendo válidas. Medido: el error angular que se introduce es de ~1°, muy
+  // por debajo de lo que se aprecia, y preferible a aplanar la cara.
+  //
+  // Si algún día se sube mucho el factor de adelgazado, revisar esto.
 }
 
 for (const r of resumen) {
-  console.log(`${r.que.padEnd(16)} x${r.k}  ${r.tocados} vertices`);
+  console.log(`vertices afinados: ${r.tocados}`);
+  for (const [nb, n] of [...r.cuenta].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${nb.padEnd(14)} x${K_HUESO[nb]}  ${n}`);
+  }
 }
 
 // medidas de control
@@ -194,6 +255,6 @@ const el2 = [0, 0, 0];
 for (let i = 0; i < POS.getCount(); i++) { POS.getElement(i, el2); alto = Math.max(alto, el2[1]); }
 console.log(`\nancho de cabeza: ${franja(1.6, 1.75, 0.2)} m · altura total: ${alto.toFixed(3)} m`);
 
-await doc.transform(draco());
+await doc.transform(draco(DRACO));
 await io.write(DST, doc);
 console.log(`\n-> ${DST}${WRITE ? '  (reemplazado)' : '  (copia aparte, usa --write para reemplazar)'}`);
