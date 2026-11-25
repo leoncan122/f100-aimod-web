@@ -4,6 +4,7 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { loadGLTF, loadJSON, disposeObject, removeTransmission, MODELS } from '../loaders';
 import { measureWheelRadius } from '../vehicle';
 import { createProceduralLandscape } from '../landscape/procedural';
+import { createOgreShelter, type OgreShelter } from '../landscape/ogre-shelter';
 import type { Landscape } from '../landscape/procedural';
 import { createCameraPeek } from '../camera-peek';
 import { createCharacter } from '../character/character';
@@ -220,6 +221,12 @@ export async function createCinematicMode(
 
   // ────────── paisaje procedural (pestaña "Cinemática three.js")
   let land: Landscape | null = null;
+  /** Refugio del ogro: chabola y charca que se pueden visitar a pie. */
+  let ogre: OgreShelter | null = null;
+  /** Pose de cámara fijada desde los tests (dev): ignora cámaras y controles. */
+  let frozen: { eye: THREE.Vector3; target: THREE.Vector3 } | null = null;
+  let ogreCenter = new THREE.Vector3();
+  const OGRE_SWAMP_R = 11;
   if (procedural && vehicle) {
     onProgress(1, 'Generando paisaje…');
     // superficie de rodadura respecto al origen del vehículo: eje de cada rueda menos su radio
@@ -253,10 +260,36 @@ export async function createCinematicMode(
       const p = path[i]!;
       sightlines.push([p.clone().addScaledVector(hd, -9.5).setY(p.y + 3.2), p.clone().setY(p.y + 1)]);
     }
+    // Parcela del ogro: a 17 m del mirador, en el arco contrario al lago.
+    // Medido sobre el terreno generado: ahí la explanada es llana (pendiente 0)
+    // y queda a 150° del rumbo al lago, así que no se cruza en el plano final
+    // de la película. A esa distancia entra de sobra en el mapa de alturas que
+    // se construye al bajarse (32 m de semilado, menos 2 m de margen).
+    // El refugio se aparta del eje de la carretera: medido en la primera
+    // versión, a 17 m del mirador el asfalto cruzaba la charca por un lado.
+    // Se busca, entre los puntos llanos del arco contrario al lago, el que más
+    // lejos queda de la calzada sin salirse del radio caminable (32 m menos
+    // margen desde la puerta del coche).
+    const stopPt = path[path.length - 1]!;
+    let mejor = { x: stopPt.x + 6.1, z: stopPt.z - 15.9, d: -1 };
+    for (let a = 100; a <= 260; a += 5) {
+      const rad = (a * Math.PI) / 180;
+      for (const r of [15, 16.5, 18, 19.5]) {
+        const x = stopPt.x + Math.sin(rad) * r;
+        const z = stopPt.z + Math.cos(rad) * r;
+        // distancia al camino muestreado
+        let d = Infinity;
+        for (const p of path) d = Math.min(d, Math.hypot(p.x - x, p.z - z));
+        if (d > mejor.d) mejor = { x, z, d };
+      }
+    }
+    ogreCenter = new THREE.Vector3(mejor.x, 0, mejor.z);
+
     land = createProceduralLandscape({
       path,
       groundOffset,
       sightlines,
+      basin: { center: ogreCenter, radius: OGRE_SWAMP_R, depth: 1.5 },
       stop: path[path.length - 1]!.clone(),
       lake: { center: new THREE.Vector3(-137.8, 12, -154.5), level: 12 },
       sun,
@@ -264,9 +297,19 @@ export async function createCinematicMode(
     });
     scene.add(land.group);
     if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__land = land;
+
+    ogre = createOgreShelter({
+      center: ogreCenter,
+      heightAt: land.heightAt,
+      swampRadius: OGRE_SWAMP_R,
+      swampDepth: 0.75,
+    });
+    scene.add(ogre.group);
+    if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ogre = ogre;
   }
 
   const groundMeshes: THREE.Mesh[] = land ? [...land.groundMeshes] : [];
+  if (ogre) groundMeshes.push(...ogre.groundMeshes);
   if (!land) {
     gltf.scene.traverse((o) => {
       if ((o as THREE.Mesh).isMesh && /^(Paisaje_Terreno|Ruta_Camino|Mirador_Explanada)/.test(o.name)) groundMeshes.push(o as THREE.Mesh);
@@ -450,6 +493,25 @@ export async function createCinematicMode(
       canvas: renderer.domElement,
       character: driver,
       onBoard: board,
+      places: [
+        {
+          id: 'ogro',
+          label: 'Visitar el refugio del ogro',
+          icon: 'home',
+          code: 'KeyR',
+          keyLabel: 'R',
+          // Null mientras no haya refugio o no se haya bajado: así el menú
+          // desactiva la acción en vez de mandarle a caminar a ninguna parte.
+          target: () => {
+            if (!ogre || !driver) return null;
+            const p = ogre.doorway.clone();
+            p.y = driver.groundAt(p.x, p.z);
+            // al llegar, mirando a la puerta de la chabola
+            const yaw = Math.atan2(ogre.swamp.center.x - p.x, ogre.swamp.center.z - p.z);
+            return { point: p, yaw };
+          },
+        },
+      ],
     });
   }
   // Solo en dev: los scripts de test leen el estado del conductor y paran el tiempo sin que se baje.
@@ -467,6 +529,23 @@ export async function createCinematicMode(
         controls.target.copy(target);
         controls.update();
       },
+      /**
+       * Cámara cruda: se coloca y se queda, sin OrbitControls de por medio.
+       *
+       * `look` pasa por los controles, que al actualizarse reencuadran según
+       * su `minDistance` y empujan la cámara: con el objetivo a 2-3 m la
+       * expulsan, así que no sirve para fotos desde dentro de un interior.
+       * Aquí se desactivan los controles y se fija la pose a mano.
+       */
+      freeze: (eye: THREE.Vector3, target: THREE.Vector3) => {
+        while (cam !== 'libre') camBtn.click();
+        controls.enabled = false;
+        peek.setEnabled(false);
+        frozen = { eye: eye.clone(), target: target.clone() };
+        camera.position.copy(eye);
+        camera.lookAt(target);
+      },
+      unfreeze: () => { frozen = null; controls.enabled = cam === 'libre'; },
     };
   }
   seek.oninput = () => {
@@ -758,6 +837,12 @@ export async function createCinematicMode(
         peekTarget.y += 1.1;
       }
       peek.apply(dt);
+      // Pose fijada desde un test: se impone al final, cuando ya han pasado
+      // las cámaras, los controles y el peek. Si no, cada uno la movería.
+      if (frozen) {
+        camera.position.copy(frozen.eye);
+        camera.lookAt(frozen.target);
+      }
       if (driver && driver.shake > 0) {
         const k = 0.012 * driver.shake;
         camera.position.x += (Math.random() - 0.5) * k;

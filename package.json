@@ -18,7 +18,10 @@
     "icons": "node scripts/capture-icons.mjs",
     "test:modes": "node scripts/test-visible-modes.mjs",
     "models:optimize": "node scripts/optimize-models.mjs",
-    "models:verify": "node scripts/verify-models.mjs"
+    "models:verify": "node scripts/verify-models.mjs",
+    "test:ogro": "node scripts/test-ogro.mjs",
+    "test:visita": "node scripts/test-visita-ogro.mjs",
+    "ogro": "node scripts/capture-ogro.mjs"
   },
   "devDependencies": {
     "@gltf-transform/cli": "^4.5.1",
