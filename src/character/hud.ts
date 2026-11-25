@@ -27,6 +27,22 @@ export interface CharacterHudOptions {
   character: Character;
   /** Volver a la camioneta (arranca la película al sentarse). */
   onBoard: () => void;
+  /**
+   * Sitios a los que se puede ir caminando (el refugio del ogro, por ejemplo).
+   *
+   * Se pasan como lista en vez de cablear cada destino aquí: el HUD no tiene
+   * por qué saber qué hay en el escenario. Si la lista viene vacía no aparece
+   * ninguna acción de viaje.
+   */
+  places?: {
+    id: string;
+    label: string;
+    icon: 'home';
+    code: string;
+    keyLabel: string;
+    /** Destino y hacia dónde mirar al llegar. Null si ahora no se puede ir. */
+    target: () => { point: THREE.Vector3; yaw: number } | null;
+  }[];
 }
 
 const MOVE_KEYS: Record<string, 'f' | 'b' | 'l' | 'r'> = {
@@ -111,6 +127,20 @@ export function createCharacterHud(opts: CharacterHudOptions) {
       },
       { id: 'wave', icon: 'wave', label: 'Saludar', code: 'KeyQ', keyLabel: 'Q', run: () => ch.wave() },
       { id: 'board', icon: 'board', label: 'Subir a la camioneta', code: 'KeyE', keyLabel: 'E', run: () => opts.onBoard() },
+      // destinos del escenario (los aporta quien crea el HUD)
+      ...(opts.places ?? []).map((p) => ({
+        id: p.id,
+        icon: p.icon,
+        label: p.label,
+        code: p.code,
+        keyLabel: p.keyLabel,
+        run: () => {
+          const d = p.target();
+          if (d) ch.walkTo(d.point, d.yaw);
+        },
+        // a pie y con destino válido; conduciendo no tiene sentido
+        enabled: () => onFoot() && p.target() !== null,
+      })),
     ],
   });
 

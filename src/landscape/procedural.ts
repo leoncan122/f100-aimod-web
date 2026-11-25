@@ -29,6 +29,12 @@ export interface LandscapeOptions {
   /** Donde se detiene la camioneta al final (mirador). */
   stop: THREE.Vector3;
   lake: { center: THREE.Vector3; level: number };
+  /**
+   * Hondonada opcional para una charca (el refugio del ogro). El terreno se
+   * excava aquí antes de colocar nada, así el agua queda encajada en un vaso
+   * de verdad en vez de apoyada sobre la hierba.
+   */
+  basin?: { center: THREE.Vector3; radius: number; depth: number };
   /** Dirección hacia el sol (normalizada). */
   sun: THREE.Vector3;
   fogColor: THREE.ColorRepresentation;
@@ -201,9 +207,24 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
       const dp = Math.hypot(x - opts.stop.x, z - opts.stop.z);
       h = THREE.MathUtils.lerp(h, stopY - 0.04, 1 - smooth(24, 46, dp));
 
+      // hondonada de la charca: vaso suave con el borde fundido en el terreno
+      if (opts.basin) {
+        const b = opts.basin;
+        const rb = Math.hypot(x - b.center.x, z - b.center.z);
+        if (rb < b.radius * 2.1) {
+          // perfil de cuenco: hondo en el centro, plano al llegar al borde
+          const k = 1 - smooth(b.radius * 0.55, b.radius * 1.65, rb);
+          h -= b.depth * k * k * (3 - 2 * k);
+        }
+      }
+
       // carretera: plano bajo el asfalto y talud hasta el terreno natural
       h = THREE.MathUtils.lerp(h, yr - 0.22, 1 - smooth(FLAT, FLAT + BLEND, d));
-      if (dp < 24) h = Math.max(h, stopY - 0.04);
+      // La explanada del mirador se impone como suelo mínimo... salvo dentro de
+      // la hondonada: si no, este Math.max la rellena y el agua queda enterrada.
+      const enHoya = opts.basin
+        && Math.hypot(x - opts.basin.center.x, z - opts.basin.center.z) < opts.basin.radius * 1.65;
+      if (dp < 24 && !enHoya) h = Math.max(h, stopY - 0.04);
 
       H[iz * N + ix] = h;
       D[iz * N + ix] = d;
@@ -225,6 +246,11 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
       }
     }
   };
+  // La hondonada se excava DESPUÉS de despejar las líneas de visión: `lower`
+  // aplana todo lo que asoma bajo cada línea y, como la parcela del ogro cae a
+  // 17 m del mirador, rellenaba el vaso recién cavado (bajaba 0,19 m de los
+  // 1,5 pedidos). Cavar al final también evita que un terreno ya rebajado
+  // empuje la charca más hondo de la cuenta.
   for (const [cam, target] of opts.sightlines) {
     lower(cam.x, cam.z, cam.y - 1.6, 9);
     for (let s = 1; s <= 8; s++) {
@@ -235,6 +261,28 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
         THREE.MathUtils.lerp(cam.y, target.y, u) - 1.2,
         6,
       );
+    }
+  }
+
+  // ───────────────────────── hondonada de la charca (al final, ver arriba)
+  if (opts.basin) {
+    const b = opts.basin;
+    const cx = Math.round((b.center.x - X0) / dx), cz = Math.round((b.center.z - Z0) / dz);
+    const rc = Math.ceil((b.radius * 2.1) / dx);
+    for (let iz = Math.max(0, cz - rc); iz <= Math.min(N - 1, cz + rc); iz++) {
+      for (let ix = Math.max(0, cx - rc); ix <= Math.min(N - 1, cx + rc); ix++) {
+        const px = X0 + ix * dx, pz = Z0 + iz * dz;
+        const rb = Math.hypot(px - b.center.x, pz - b.center.z);
+        if (rb > b.radius * 2.1) continue;
+        // Radio deformado con ruido: una hoya perfectamente circular se lee
+        // como un cráter de molde, no como una charca.
+        const ang = Math.atan2(pz - b.center.z, px - b.center.x);
+        const wob = 1 + 0.42 * fbm(Math.cos(ang) * 3.1, Math.sin(ang) * 3.1, 613, 4)
+                      + 0.12 * fbm(px * 0.06, pz * 0.06, 811, 2);
+        // perfil de cuenco: hondo en el centro, fundido con el terreno al borde
+        const k = 1 - smooth(b.radius * 0.55 * wob, b.radius * 1.65 * wob, rb);
+        H[iz * N + ix]! -= b.depth * k * k * (3 - 2 * k);
+      }
     }
   }
 
@@ -277,6 +325,9 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
   const cDirt = new THREE.Color(0x8a7254), cRock = new THREE.Color(0x857a6a);
   const cSand = new THREE.Color(0xbfa877), cDeep = new THREE.Color(0x3a4a3c);
   const cMount = new THREE.Color(0x7c8a6a);
+  // Parcela del ogro: hierba enferma y lodo. Sin esto la charca queda sobre
+  // prado verde y no parece un pantano, solo un charco.
+  const cMarsh = new THREE.Color(0x5c5a2e), cMud = new THREE.Color(0x46402a);
   const c = new THREE.Color();
   for (let k = 0; k < N * N; k++) {
     const x = pos[k * 3]!, y = pos[k * 3 + 1]!, z = pos[k * 3 + 2]!;
@@ -287,6 +338,12 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
     const rl = Math.hypot(x - lc.x, z - lc.z);
     if (rl < SHORE_R + 25) c.lerp(cSand, (1 - smooth(level + 0.6, level + 2.2, y)));
     c.lerp(cDeep, smooth(level - 0.4, level - 3, y));
+    if (opts.basin) {
+      const rb = Math.hypot(x - opts.basin.center.x, z - opts.basin.center.z);
+      // de fuera hacia dentro: prado -> hierba enferma -> lodo del fondo
+      c.lerp(cMarsh, 0.85 * (1 - smooth(opts.basin.radius * 1.1, opts.basin.radius * 2.3, rb)));
+      c.lerp(cMud, 0.9 * (1 - smooth(opts.basin.radius * 0.5, opts.basin.radius * 1.15, rb)));
+    }
     // variación fina para que no se vea plano
     c.multiplyScalar(0.92 + 0.16 * hash2(Math.round(x * 0.7), Math.round(z * 0.7), 5));
     col[k * 3] = c.r; col[k * 3 + 1] = c.g; col[k * 3 + 2] = c.b;
@@ -444,6 +501,8 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
     if (d < 11) continue;
     if (Math.hypot(x - lc.x, z - lc.z) < SHORE_R + 6) continue;
     if (Math.hypot(x - opts.stop.x, z - opts.stop.z) < 30) continue;
+    // la parcela del ogro se deja despejada: su vegetación la pone su módulo
+    if (opts.basin && Math.hypot(x - opts.basin.center.x, z - opts.basin.center.z) < opts.basin.radius * 2.2) continue;
     const y = heightAt(x, z);
     if (y < level + 1.5) continue;
     const slope = Math.abs(heightAt(x + 2, z) - heightAt(x - 2, z)) + Math.abs(heightAt(x, z + 2) - heightAt(x, z - 2));
@@ -507,6 +566,7 @@ export function createProceduralLandscape(opts: LandscapeOptions): Landscape {
       s = 0.3 + rand() * rand() * 2.2;
     }
     if (roadQuery(road, x, z).d < ROAD_HALF + SHOULDER + 2 + s) continue;
+    if (opts.basin && Math.hypot(x - opts.basin.center.x, z - opts.basin.center.z) < opts.basin.radius * 1.8) continue;
     if (blocksView(x, z, heightAt(x, z) + s)) continue;
     putRock(x, z, s);
   }

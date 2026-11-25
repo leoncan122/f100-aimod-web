@@ -28,6 +28,7 @@ export type IconId =
   | 'laugh'
   | 'hug'
   | 'kiss'
+  | 'home'
   | 'close';
 
 interface Icon {
@@ -95,6 +96,10 @@ const ICONS: Record<IconId, Icon> = {
 
   // Beso: corazón macizo, inconfundible a cualquier tamaño.
   kiss: { d: 'M12 21.2S3.2 15.9 3.2 10.1A5.3 5.3 0 0 1 12 6.7a5.3 5.3 0 0 1 8.8 3.4c0 5.8-8.8 11.1-8.8 11.1z', solid: true },
+
+  // Casa del ogro: tejado muy torcido sobre un cuerpo bajo. La inclinación
+  // asimétrica es lo que la distingue de un icono de "inicio" al vuelo.
+  home: { d: 'M3.2 11.4 12 4.2l8.8 5.6M5.6 12.4v8h12.8v-8.6M10 20.4v-5.2h4v5.2', w: 2 },
 
   close: { d: 'M6 6l12 12M18 6 6 18', w: 2.3 },
 };

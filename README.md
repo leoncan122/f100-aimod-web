@@ -81,6 +81,48 @@ las pestañas ni acepta el hash `#cinematic` en producción. En `npm run dev` s�
 aparece, para poder seguir midiéndola con los scripts. Para volver a publicarla
 basta quitar ese `hidden`.
 
+## El refugio del ogro
+
+En el campo, junto al mirador, hay un refugio que se puede visitar a pie:
+un tocón gigante y hueco al borde de una charca, inspirado en la casa de
+Shrek (tocón elevado sobre sus raíces, techo cónico de paja, todo cubierto
+de musgo; dentro, una sola pieza con cama, mesa, hogar y tarros).
+
+Vive en `src/landscape/ogre-shelter.ts`, aparte del paisaje: recibe un centro
+y una función de altura, y devuelve el grupo, el suelo pisable y el punto de
+visita. No sabe nada de la cinemática, así que sirve para cualquier escenario.
+
+Para llegar: bajarse de la camioneta y usar **Visitar el refugio del ogro**
+(tecla `R`) en el menú del conductor. Los destinos se pasan al HUD como lista
+(`places` en `createCharacterHud`), no cableados: añadir otro sitio es añadir
+una entrada.
+
+### Restricciones que condicionan dónde se planta
+
+- **Radio caminable.** Al bajarse se construye un mapa de alturas de 32 m de
+  semilado alrededor de la puerta y el personaje se frena 2 m antes del borde.
+  El **punto de visita** tiene que caer dentro de esos 30 m; el centro del
+  tocón puede quedar más lejos, porque nadie camina hasta ahí.
+- **La hondonada se excava al final.** `lower()` (despeje de las líneas de
+  visión de la cámara) y el `Math.max` de la explanada del mirador reescriben
+  el terreno; excavando antes, rellenaban el vaso (bajaba 0,19 m de 1,5).
+- **El agua se apoya sobre el fondo excavado** (`level = heightAt + calado`).
+  Restando, el disco quedaba bajo el lecho y no se veía.
+- **El disco de agua se recorta al contorno real** donde el terreno cruza el
+  nivel, por 48 sectores. Un radio fijo daba un óvalo de molde y pintaba agua
+  sobre terreno seco, de ahí juncos que parecían brotar de la charca.
+- **Nada se coloca por radio nominal.** Troncos, estacas, juncos y huesos se
+  comprueban contra la altura real del terreno, y su hundimiento es
+  proporcional al vuelco: al inclinar un cilindro su base se despega del suelo.
+- **La casa apoya en el punto más bajo de su huella** y el piso interior va por
+  encima del más alto. Con 15 m de diámetro en pendiente, apoyar en el centro
+  la dejaba flotando por un lado, y un piso bajo lo atravesaba la hierba.
+
+`npm run test:ogro` mide todo esto (11 comprobaciones) y `test-visita-ogro.mjs`
+baja al conductor, pulsa `R` y verifica que llega a la puerta. Ese segundo es
+lento a propósito: bajo SwiftShader el personaje avanza ~0,12 m/s reales, así
+que recorrer 18 m lleva unos 3 minutos.
+
 ## Aitziber y los obstáculos
 
 Al bajarse queda pegada a su propia puerta abierta y tiene que cruzar hasta el
